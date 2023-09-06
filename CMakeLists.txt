@@ -18,31 +18,33 @@ option(ENABLE_CLANG_TIDY "Enable to add clang tidy." ON)
 option(ENABLE_CLANG_FORMAT "Enable to add clang-format." ON)
 
 include(Warnings)
-#  include(Tools) # needs clang tidy and clang format
+
+# include(Tools) # needs clang tidy and clang format
 include(ConfigSafeGuards)
 
 # add_clang_format_target() # needs python
 
 # set (VCPKG_DIR ${CMAKE_SOURCE_DIR}/external/vcpkg)
 # you can set any other vcpkg installation on your system
-set (VCPKG_DIR ${CMAKE_SOURCE_DIR}/../../external)
+set(VCPKG_DIR ${CMAKE_SOURCE_DIR}/../../external)
 include(${VCPKG_DIR}/vcpkg/scripts/buildsystems/vcpkg.cmake)
 
 find_package(fmt CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
+
+# find_package(imgui CONFIG REQUIRED)
+find_package(imgui REQUIRED)
 find_package(implot CONFIG REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(OpenCV REQUIRED)
 
-# Add the directory containing stb_image.h to the include path
-include_directories(external) 
 
+# Specify the include directories for ImGuiFileDialog
+# target_include_directories(ImGuiFileDialog PRIVATE ${VCPKG_DIR}/packages/imgui_arm64-osx/include)
 add_executable(${PROJECT_NAME}
-    src/main.cpp
     src/PixelPaintView.cpp
     src/FileUtils.cpp
-    src/MediaPreview.cpp
+    src/main.cpp
 )
 
 add_compile_definitions(NOMINMAX)
@@ -50,9 +52,8 @@ add_compile_definitions(NOMINMAX)
 target_set_warnings(TARGET ${PROJECT_NAME}
     ENABLE ${ENABLE_WARNINGS}
     AS_ERRORS ${ENABLE_WARNINGS_AS_ERRORS})
-# add_clang_tidy_msvc_to_target(${PROJECT_NAME})
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${Stb_INCLUDE_DIR} src/)
+# add_clang_tidy_msvc_to_target(${PROJECT_NAME})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE fmt::fmt-header-only)
 target_link_libraries(${PROJECT_NAME} PRIVATE glfw)
@@ -60,3 +61,4 @@ target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL)
 target_link_libraries(${PROJECT_NAME} PRIVATE imgui::imgui)
 target_link_libraries(${PROJECT_NAME} PRIVATE implot::implot)
 target_link_libraries(${PROJECT_NAME} PRIVATE ${OpenCV_LIBS})
+
