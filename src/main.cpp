@@ -6,6 +6,8 @@
 #include "imgui_impl_opengl3_loader.h"
 #include <imgui.h>
 #include <implot.h>
+#include "ImGuiFileDialog.h"
+
 
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <GLES2/gl2.h>
@@ -112,6 +114,8 @@ int main(int, char **)
     style.Colors[ImGuiCol_TableBorderLight] = ImVec4(1.0, 1.0, 1.0, 1.0);
 
     PixelPaintView window_obj;
+
+    // ImGuiFileDialog::Instance()-> (ImGui::GetCurrentContext());
 
     while (!glfwWindowShouldClose(window))
     {
