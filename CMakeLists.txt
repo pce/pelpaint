@@ -152,10 +152,14 @@ set(IMGUI_FILE_DIALOG_SOURCES
 # Main executable
 if(PLATFORM_MACOS OR PLATFORM_IOS)
     # Use .mm extension for Objective-C++ on Apple platforms
+    # Copy PixelPaintView.cpp to .mm for Metal support
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/PixelPaintView.cpp
+                   ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm COPYONLY)
+
     add_executable(${PROJECT_NAME}
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.mm
-        src/PixelPaintView.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
         src/FileUtils.cpp
     )
 else()

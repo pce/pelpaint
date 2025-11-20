@@ -69,14 +69,16 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         SDL_Log("Error: SDL_Init(): %s\n", SDL_GetError());
         return SDL_APP_FAILURE;
     }
+    SDL_Log("SDL initialized successfully\n");
 
 #if defined(USE_METAL_BACKEND)
     // Create window for Metal
+    SDL_Log("Creating Metal window...\n");
     g_AppState->window = SDL_CreateWindow(
         "PixelPaint",
         WINDOW_WIDTH,
         WINDOW_HEIGHT,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
+        SDL_WINDOW_METAL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
 
     if (!g_AppState->window)
@@ -84,14 +86,17 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         SDL_Log("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
         return SDL_APP_FAILURE;
     }
+    SDL_Log("Window created successfully\n");
 
     // Setup Metal
+    SDL_Log("Setting up Metal...\n");
     g_AppState->metalView = SDL_Metal_CreateView(g_AppState->window);
     g_AppState->metalDevice = MTLCreateSystemDefaultDevice();
     g_AppState->metalCommandQueue = [g_AppState->metalDevice newCommandQueue];
     g_AppState->metalLayer = (__bridge CAMetalLayer*)SDL_Metal_GetLayer(g_AppState->metalView);
     g_AppState->metalLayer.device = g_AppState->metalDevice;
     g_AppState->metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    SDL_Log("Metal setup complete\n");
 
 #else
     // Setup OpenGL attributes
@@ -145,6 +150,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 #endif
 
     // Setup Dear ImGui context
+    SDL_Log("Setting up ImGui...\n");
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
@@ -155,6 +161,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
+    SDL_Log("ImGui setup complete\n");
 
     auto& style = ImGui::GetStyle();
     style.Colors[ImGuiCol_TableBorderStrong] = ImVec4(1.0, 1.0, 1.0, 1.0);
@@ -177,8 +184,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 #endif
 
     // Create PixelPaint view
+    SDL_Log("Creating PixelPaint view...\n");
     g_AppState->pixelPaintView = std::make_unique<PixelPaintView>();
 
+    SDL_Log("Initialization complete! Window should be visible.\n");
     return SDL_APP_CONTINUE;
 }
 
@@ -219,18 +228,6 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     // Metal rendering
     @autoreleasepool
     {
-        // Start the Dear ImGui frame
-        ImGui_ImplMetal_NewFrame((__bridge MTLRenderPassDescriptor*)state->metalLayer);
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        // Render our UI
-        state->pixelPaintView->Draw("PixelPaint");
-
-        // Rendering
-        ImGui::Render();
-        ImDrawData* draw_data = ImGui::GetDrawData();
-
         // Get next drawable
         id<CAMetalDrawable> drawable = [state->metalLayer nextDrawable];
         if (!drawable)
@@ -244,6 +241,18 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
         renderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(30.0/255.0, 30.0/255.0, 30.0/255.0, 1.0);
+
+        // Start the Dear ImGui frame
+        ImGui_ImplMetal_NewFrame(renderPassDescriptor);
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        // Render our UI
+        state->pixelPaintView->Draw("PixelPaint");
+
+        // Rendering
+        ImGui::Render();
+        ImDrawData* draw_data = ImGui::GetDrawData();
 
         // Create command buffer
         id<MTLCommandBuffer> commandBuffer = [state->metalCommandQueue commandBuffer];

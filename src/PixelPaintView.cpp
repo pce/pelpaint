@@ -8,7 +8,8 @@
 #include <queue>
 
 #if defined(USE_METAL_BACKEND)
-    // Metal texture creation will be handled separately
+    #import <Metal/Metal.h>
+    #import <QuartzCore/CAMetalLayer.h>
 #elif defined(__EMSCRIPTEN__)
     #include <SDL3/SDL_opengles2.h>
 #else
@@ -36,7 +37,11 @@ PixelPaintView::~PixelPaintView()
 // Initialize GPU texture
 void PixelPaintView::InitializeTexture()
 {
-#ifndef USE_METAL_BACKEND
+#if defined(USE_METAL_BACKEND)
+    // Metal texture will be created on first update
+    textureID = 0;
+    textureNeedsUpdate = true;
+#else
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -52,7 +57,49 @@ void PixelPaintView::UpdateTexture()
 {
     if (!textureNeedsUpdate) return;
     
-#ifndef USE_METAL_BACKEND
+#if defined(USE_METAL_BACKEND)
+    @autoreleasepool {
+        // Get the default Metal device
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (!device) {
+            std::cerr << "Metal device not available" << std::endl;
+            return;
+        }
+        
+        // Create texture descriptor
+        MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                                     width:canvasWidth
+                                                                                                    height:canvasHeight
+                                                                                                 mipmapped:NO];
+        textureDescriptor.usage = MTLTextureUsageShaderRead;
+        textureDescriptor.storageMode = MTLStorageModeManaged;
+        
+        // Create or recreate texture
+        id<MTLTexture> texture = nil;
+        if (textureID != 0) {
+            texture = (__bridge id<MTLTexture>)(void*)textureID;
+        }
+        
+        // Always create new texture for size changes
+        texture = [device newTextureWithDescriptor:textureDescriptor];
+        
+        if (!texture) {
+            std::cerr << "Failed to create Metal texture" << std::endl;
+            return;
+        }
+        
+        // Upload pixel data
+        MTLRegion region = MTLRegionMake2D(0, 0, canvasWidth, canvasHeight);
+        [texture replaceRegion:region
+                   mipmapLevel:0
+                     withBytes:canvasData.data()
+                   bytesPerRow:canvasWidth * 4];
+        
+        // Store texture pointer
+        textureID = (unsigned int)(uintptr_t)(__bridge_retained void*)texture;
+        textureNeedsUpdate = false;
+    }
+#else
     glBindTexture(GL_TEXTURE_2D, textureID);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, canvasWidth, canvasHeight, 
                  0, GL_RGBA, GL_UNSIGNED_BYTE, canvasData.data());
@@ -63,7 +110,13 @@ void PixelPaintView::UpdateTexture()
 // Destroy texture
 void PixelPaintView::DestroyTexture()
 {
-#ifndef USE_METAL_BACKEND
+#if defined(USE_METAL_BACKEND)
+    if (textureID != 0) {
+        id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)(void*)textureID;
+        texture = nil;
+        textureID = 0;
+    }
+#else
     if (textureID != 0) {
         glDeleteTextures(1, &textureID);
         textureID = 0;
@@ -745,7 +798,13 @@ void PixelPaintView::DrawCanvasView()
     canvasPos = ImGui::GetCursorScreenPos();
     
     // Draw canvas
+#if defined(USE_METAL_BACKEND)
+    if (textureID != 0) {
+        ImGui::Image((__bridge void*)(id<MTLTexture>)(void*)textureID, imageSize);
+    }
+#else
     ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(textureID)), imageSize);
+#endif
     
     // Draw grid overlay
     if (showGrid && canvasScale >= 2.0f) {

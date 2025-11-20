@@ -21,7 +21,36 @@ Immersive Color Palette: Choose from a vibrant array of colors to add depth and 
 
 ## Build
 
-In CMakeLists.txt adjust the path to vcpkg or install it with: 
+
+# macOS (tested and working!)
+./scripts/dev.sh run-macos
+
+# iOS Device
+./scripts/dev.sh ios
+
+# iOS Simulator  
+./scripts/dev.sh ios-sim
+
+# Web (requires Emscripten)
+./scripts/dev.sh run-web
+
+
+
+Built with ❤️ using SDL3, Dear ImGui, and modern C++
+
+
+./scripts/dev.sh clean-macos
+
+./scripts/dev.sh clean-macos && cd build/macos-Release && cmake ../../ -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" -G "Xcode" > /dev/null 2>&1 && echo "CMake config successful" 
+
+
+mkdir -p build/macos-Release && cd build/macos-Release && cmake ../../ -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" -G "Xcode" 2>&1 | grep -E "(error|Error|ERROR|Configuring|Generating done)" 
+
+
+cd build/macos-Release && cmake --build . --config Release 2>&1 | grep -E "(error|Error|ERROR|BUILD SUCCEEDED|BUILD FAILED|PixelPaint.app)" | head -20 
+
+
+In CMakeLists.txt adjust the path to vcpkg or install it with:
 
     cd ../../
     mkdir external && cd external 
