@@ -187,6 +187,11 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     SDL_Log("Creating PixelPaint view...\n");
     g_AppState->pixelPaintView = std::make_unique<PixelPaintView>();
 
+#if defined(USE_METAL_BACKEND)
+    // Pass Metal device to PixelPaintView to avoid recreating it every frame
+    g_AppState->pixelPaintView->SetMetalDevice((__bridge void*)g_AppState->metalDevice);
+#endif
+
     SDL_Log("Initialization complete! Window should be visible.\n");
     return SDL_APP_CONTINUE;
 }

@@ -12,6 +12,14 @@
 #include "FileUtils.hpp"
 #include "ColorPalettes.hpp"
 
+#if defined(USE_METAL_BACKEND)
+    #ifdef __OBJC__
+        @protocol MTLDevice;
+    #else
+        typedef void* id;
+    #endif
+#endif
+
 namespace fs = std::filesystem;
 
 // Undo/Redo snapshot
@@ -48,6 +56,10 @@ public:
     ~PixelPaintView();
     
     void Draw(std::string_view label);
+    
+#if defined(USE_METAL_BACKEND)
+    void SetMetalDevice(void* device);  // Call this from main to set the device
+#endif
 
 private:
     // Canvas dimensions
@@ -60,6 +72,11 @@ private:
     // GPU texture handle (platform-specific)
     unsigned int textureID = 0;
     bool textureNeedsUpdate = true;
+    
+#if defined(USE_METAL_BACKEND)
+    // Cached Metal device to avoid recreating every frame
+    void* metalDevice = nullptr;  // id<MTLDevice> stored as void*
+#endif
     
     // Texture management
     void InitializeTexture();

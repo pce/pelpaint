@@ -144,3 +144,5 @@ project.xcworkspace
 
 # don't ignore the .gitignore file
 !.gitignore
+.idea/
+imgui.ini

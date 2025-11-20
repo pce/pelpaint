@@ -32,9 +32,16 @@ PixelPaintView::PixelPaintView()
 PixelPaintView::~PixelPaintView()
 {
     DestroyTexture();
+#if defined(USE_METAL_BACKEND)
+    // Release cached Metal device
+    if (metalDevice) {
+        CFRelease(metalDevice);
+        metalDevice = nullptr;
+    }
+#endif
 }
 
-// Initialize GPU texture
+// Initialize texture
 void PixelPaintView::InitializeTexture()
 {
 #if defined(USE_METAL_BACKEND)
@@ -52,6 +59,20 @@ void PixelPaintView::InitializeTexture()
 #endif
 }
 
+#if defined(USE_METAL_BACKEND)
+// Set Metal device (called from main)
+void PixelPaintView::SetMetalDevice(void* device)
+{
+    if (metalDevice && metalDevice != device) {
+        CFRelease(metalDevice);
+    }
+    metalDevice = device;
+    if (metalDevice) {
+        CFRetain(metalDevice);
+    }
+}
+#endif
+
 // Update texture from canvas data
 void PixelPaintView::UpdateTexture()
 {
@@ -59,8 +80,13 @@ void PixelPaintView::UpdateTexture()
     
 #if defined(USE_METAL_BACKEND)
     @autoreleasepool {
-        // Get the default Metal device
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        // Use cached Metal device (set from main)
+        id<MTLDevice> device = (__bridge id<MTLDevice>)metalDevice;
+        if (!device) {
+            // Fallback: create device if not set (should not happen in normal use)
+            device = MTLCreateSystemDefaultDevice();
+            metalDevice = (__bridge_retained void*)device;
+        }
         if (!device) {
             std::cerr << "Metal device not available" << std::endl;
             return;
@@ -293,44 +319,53 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
 {
     if (palette.empty()) return;
     
-    PushUndo("Apply dithering");
+    PushUndo("Apply Floyd-Steinberg Dithering");
     
-    // Create a copy to work with
+    // Work with a temporary buffer to avoid reading already-quantized pixels
     std::vector<Pixel> tempData = canvasData;
     
-    for (int y = 0; y < canvasHeight; ++y) {
-        for (int x = 0; x < canvasWidth; ++x) {
+    // Helper lambda to distribute error to a neighbor pixel
+    auto DistributeError = [&](int x, int y, int errR, int errG, int errB, float factor) {
+        if (!IsValidCoord(x, y)) return;
+        
+        int idx = GetPixelIndex(x, y);
+        Pixel& p = tempData[idx];
+        
+        // Add weighted error to neighbor, clamping to valid range
+        p.r = std::clamp(static_cast<int>(p.r) + static_cast<int>(errR * factor), 0, 255);
+        p.g = std::clamp(static_cast<int>(p.g) + static_cast<int>(errG * factor), 0, 255);
+        p.b = std::clamp(static_cast<int>(p.b) + static_cast<int>(errB * factor), 0, 255);
+    };
+    
+    // Process pixels left-to-right, top-to-bottom
+    for (int y = 0; y < canvasHeight - 1; ++y) {
+        for (int x = 1; x < canvasWidth - 1; ++x) {
+            // 1. Get current pixel from temp buffer
             int idx = GetPixelIndex(x, y);
             Pixel oldPixel = tempData[idx];
-            Pixel newPixel = Pixel::FindNearest(oldPixel, palette);
             
+            // 2. Find closest color in palette (Quantize)
+            Pixel newPixel = FindNearestPaletteColor(oldPixel, palette);
+            
+            // 3. Update pixel with quantized color in temp buffer
             tempData[idx] = newPixel;
             
-            // Calculate error
+            // 4. Calculate quantization error
             int errR = static_cast<int>(oldPixel.r) - static_cast<int>(newPixel.r);
             int errG = static_cast<int>(oldPixel.g) - static_cast<int>(newPixel.g);
             int errB = static_cast<int>(oldPixel.b) - static_cast<int>(newPixel.b);
             
-            // Distribute error to neighbors
-            auto distributeError = [&](int dx, int dy, float factor) {
-                int nx = x + dx;
-                int ny = y + dy;
-                if (IsValidCoord(nx, ny)) {
-                    int nidx = GetPixelIndex(nx, ny);
-                    Pixel& p = tempData[nidx];
-                    p.r = std::clamp(static_cast<int>(p.r) + static_cast<int>(errR * factor), 0, 255);
-                    p.g = std::clamp(static_cast<int>(p.g) + static_cast<int>(errG * factor), 0, 255);
-                    p.b = std::clamp(static_cast<int>(p.b) + static_cast<int>(errB * factor), 0, 255);
-                }
-            };
-            
-            distributeError(1, 0, 7.0f / 16.0f);
-            distributeError(-1, 1, 3.0f / 16.0f);
-            distributeError(0, 1, 5.0f / 16.0f);
-            distributeError(1, 1, 1.0f / 16.0f);
+            // 5. Distribute error to neighboring pixels using Floyd-Steinberg matrix:
+            //        X   7/16
+            //  3/16 5/16 1/16
+            DistributeError(x + 1, y    , errR, errG, errB, 7.0f / 16.0f);  // Right
+            DistributeError(x - 1, y + 1, errR, errG, errB, 3.0f / 16.0f);  // Down-Left
+            DistributeError(x    , y + 1, errR, errG, errB, 5.0f / 16.0f);  // Down
+            DistributeError(x + 1, y + 1, errR, errG, errB, 1.0f / 16.0f);  // Down-Right
         }
     }
     
+    // Apply the dithered result
     canvasData = tempData;
     textureNeedsUpdate = true;
 }
