@@ -12,6 +12,14 @@
 #include "FileUtils.hpp"
 #include "ColorPalettes.hpp"
 
+#if defined(USE_METAL_BACKEND)
+    #ifdef __OBJC__
+        @protocol MTLDevice;
+    #else
+        typedef void* id;
+    #endif
+#endif
+
 namespace fs = std::filesystem;
 
 // Undo/Redo snapshot
@@ -48,6 +56,10 @@ public:
     ~PixelPaintView();
     
     void Draw(std::string_view label);
+    
+#if defined(USE_METAL_BACKEND)
+    void SetMetalDevice(void* device);  // Call this from main to set the device
+#endif
 
 private:
     // Canvas dimensions
@@ -58,7 +70,12 @@ private:
     std::vector<Pixel> canvasData;
     
     // GPU texture handle (platform-specific)
+#if defined(USE_METAL_BACKEND)
+    void* metalTexture = nullptr;  // id<MTLTexture> stored as void*
+    void* metalDevice = nullptr;   // id<MTLDevice> stored as void*
+#else
     unsigned int textureID = 0;
+#endif
     bool textureNeedsUpdate = true;
     
     // Texture management
@@ -100,6 +117,7 @@ private:
     // File I/O
     bool SaveToTGA(const std::string& filename);
     bool SaveToPNG(const std::string& filename);
+    bool SaveToJPEG(const std::string& filename, int quality = 90);
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
@@ -114,6 +132,10 @@ private:
     DrawTool currentTool = DrawTool::Pencil;
     Pixel currentColor = Pixel(255, 255, 255, 255);
     BrushSettings brushSettings;
+
+    // Eraser state
+    bool eraserUseAlpha = true;
+    Pixel eraserColor = Pixel(255, 0, 255, 255); // Hot pink for visibility
     
     // Tool-specific state
     bool isDrawing = false;
@@ -127,6 +149,11 @@ private:
     std::vector<Pixel> customPalette;
     bool paletteEnabled = false;
     bool ditheringEnabled = false;
+    
+    // Color picker panel - most frequently used colors
+    std::vector<Pixel> frequentColors;
+    int maxMostUsedColors = 16;
+    void UpdateFrequentColors();
     
     // Apple Pencil / Pressure sensitivity
     float currentPressure = 1.0f;

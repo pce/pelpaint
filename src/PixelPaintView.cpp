@@ -1,4 +1,5 @@
 #include "PixelPaintView.hpp"
+#include "ImGuiFileDialog.h"
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -6,13 +7,28 @@
 #include <cstdlib>
 #include <cstring>
 #include <queue>
+#include <map>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
+
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/stb_image_write.h"
 
 #if defined(USE_METAL_BACKEND)
-    // Metal texture creation will be handled separately
+    #import <Metal/Metal.h>
+    #import <QuartzCore/CAMetalLayer.h>
 #elif defined(__EMSCRIPTEN__)
     #include <SDL3/SDL_opengles2.h>
 #else
     #include <SDL3/SDL_opengl.h>
+#endif
+
+#ifdef __APPLE__
+    #include <TargetConditionals.h>
+    #if TARGET_OS_IOS || TARGET_OS_TV
+        #include "IOSFileManager.h"
+    #endif
 #endif
 
 namespace fs = std::filesystem;
@@ -33,10 +49,14 @@ PixelPaintView::~PixelPaintView()
     DestroyTexture();
 }
 
-// Initialize GPU texture
+// Initialize texture
 void PixelPaintView::InitializeTexture()
 {
-#ifndef USE_METAL_BACKEND
+#if defined(USE_METAL_BACKEND)
+    // Metal texture will be created when device is set
+    metalTexture = nullptr;
+    textureNeedsUpdate = false;  // Don't try to update until device is set
+#else
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -47,12 +67,78 @@ void PixelPaintView::InitializeTexture()
 #endif
 }
 
+#if defined(USE_METAL_BACKEND)
+// Set Metal device (called from main)
+void PixelPaintView::SetMetalDevice(void* device)
+{
+    // Just store the pointer - main app owns the device lifetime
+    metalDevice = device;
+    // Trigger texture creation now that we have a device
+    textureNeedsUpdate = true;
+}
+#endif
+
 // Update texture from canvas data
 void PixelPaintView::UpdateTexture()
 {
     if (!textureNeedsUpdate) return;
     
-#ifndef USE_METAL_BACKEND
+#if defined(USE_METAL_BACKEND)
+    @autoreleasepool {
+        // Use cached Metal device (set from main)
+        id<MTLDevice> device = (__bridge id<MTLDevice>)metalDevice;
+        if (!device) {
+            std::cerr << "Metal device not set - call SetMetalDevice() first" << std::endl;
+            return;
+        }
+        
+        id<MTLTexture> texture = nil;
+        
+        // Check if we need to create a new texture (first time or size change)
+        bool needsNewTexture = (metalTexture == nullptr);
+        
+        if (metalTexture != nullptr) {
+            texture = (__bridge id<MTLTexture>)metalTexture;
+            // Check if size changed
+            if (texture.width != canvasWidth || texture.height != canvasHeight) {
+                needsNewTexture = true;
+                // Release old texture
+                (__bridge_transfer id<MTLTexture>)metalTexture;
+                metalTexture = nullptr;
+                texture = nil;
+            }
+        }
+        
+        if (needsNewTexture) {
+            // Create new texture
+            MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                                         width:canvasWidth
+                                                                                                        height:canvasHeight
+                                                                                                     mipmapped:NO];
+            textureDescriptor.usage = MTLTextureUsageShaderRead;
+            textureDescriptor.storageMode = MTLStorageModeManaged;
+            
+            texture = [device newTextureWithDescriptor:textureDescriptor];
+            
+            if (!texture) {
+                std::cerr << "Failed to create Metal texture" << std::endl;
+                return;
+            }
+            
+            // Store texture pointer with retained ownership
+            metalTexture = (__bridge_retained void*)texture;
+        }
+        
+        // Upload/update pixel data
+        MTLRegion region = MTLRegionMake2D(0, 0, canvasWidth, canvasHeight);
+        [texture replaceRegion:region
+                   mipmapLevel:0
+                     withBytes:canvasData.data()
+                   bytesPerRow:canvasWidth * 4];
+        
+        textureNeedsUpdate = false;
+    }
+#else
     glBindTexture(GL_TEXTURE_2D, textureID);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, canvasWidth, canvasHeight, 
                  0, GL_RGBA, GL_UNSIGNED_BYTE, canvasData.data());
@@ -63,7 +149,13 @@ void PixelPaintView::UpdateTexture()
 // Destroy texture
 void PixelPaintView::DestroyTexture()
 {
-#ifndef USE_METAL_BACKEND
+#if defined(USE_METAL_BACKEND)
+    if (metalTexture != nullptr) {
+        id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)metalTexture;
+        texture = nil;
+        metalTexture = nullptr;
+    }
+#else
     if (textureID != 0) {
         glDeleteTextures(1, &textureID);
         textureID = 0;
@@ -240,44 +332,53 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
 {
     if (palette.empty()) return;
     
-    PushUndo("Apply dithering");
+    PushUndo("Apply Floyd-Steinberg Dithering");
     
-    // Create a copy to work with
+    // Work with a temporary buffer to avoid reading already-quantized pixels
     std::vector<Pixel> tempData = canvasData;
     
-    for (int y = 0; y < canvasHeight; ++y) {
-        for (int x = 0; x < canvasWidth; ++x) {
+    // Helper lambda to distribute error to a neighbor pixel
+    auto DistributeError = [&](int x, int y, int errR, int errG, int errB, float factor) {
+        if (!IsValidCoord(x, y)) return;
+        
+        int idx = GetPixelIndex(x, y);
+        Pixel& p = tempData[idx];
+        
+        // Add weighted error to neighbor, clamping to valid range
+        p.r = std::clamp(static_cast<int>(p.r) + static_cast<int>(errR * factor), 0, 255);
+        p.g = std::clamp(static_cast<int>(p.g) + static_cast<int>(errG * factor), 0, 255);
+        p.b = std::clamp(static_cast<int>(p.b) + static_cast<int>(errB * factor), 0, 255);
+    };
+    
+    // Process pixels left-to-right, top-to-bottom
+    for (int y = 0; y < canvasHeight - 1; ++y) {
+        for (int x = 1; x < canvasWidth - 1; ++x) {
+            // 1. Get current pixel from temp buffer
             int idx = GetPixelIndex(x, y);
             Pixel oldPixel = tempData[idx];
-            Pixel newPixel = Pixel::FindNearest(oldPixel, palette);
             
+            // 2. Find closest color in palette (Quantize)
+            Pixel newPixel = FindNearestPaletteColor(oldPixel, palette);
+            
+            // 3. Update pixel with quantized color in temp buffer
             tempData[idx] = newPixel;
             
-            // Calculate error
+            // 4. Calculate quantization error
             int errR = static_cast<int>(oldPixel.r) - static_cast<int>(newPixel.r);
             int errG = static_cast<int>(oldPixel.g) - static_cast<int>(newPixel.g);
             int errB = static_cast<int>(oldPixel.b) - static_cast<int>(newPixel.b);
             
-            // Distribute error to neighbors
-            auto distributeError = [&](int dx, int dy, float factor) {
-                int nx = x + dx;
-                int ny = y + dy;
-                if (IsValidCoord(nx, ny)) {
-                    int nidx = GetPixelIndex(nx, ny);
-                    Pixel& p = tempData[nidx];
-                    p.r = std::clamp(static_cast<int>(p.r) + static_cast<int>(errR * factor), 0, 255);
-                    p.g = std::clamp(static_cast<int>(p.g) + static_cast<int>(errG * factor), 0, 255);
-                    p.b = std::clamp(static_cast<int>(p.b) + static_cast<int>(errB * factor), 0, 255);
-                }
-            };
-            
-            distributeError(1, 0, 7.0f / 16.0f);
-            distributeError(-1, 1, 3.0f / 16.0f);
-            distributeError(0, 1, 5.0f / 16.0f);
-            distributeError(1, 1, 1.0f / 16.0f);
+            // 5. Distribute error to neighboring pixels using Floyd-Steinberg matrix:
+            //        X   7/16
+            //  3/16 5/16 1/16
+            DistributeError(x + 1, y    , errR, errG, errB, 7.0f / 16.0f);  // Right
+            DistributeError(x - 1, y + 1, errR, errG, errB, 3.0f / 16.0f);  // Down-Left
+            DistributeError(x    , y + 1, errR, errG, errB, 5.0f / 16.0f);  // Down
+            DistributeError(x + 1, y + 1, errR, errG, errB, 1.0f / 16.0f);  // Down-Right
         }
     }
     
+    // Apply the dithered result
     canvasData = tempData;
     textureNeedsUpdate = true;
 }
@@ -408,6 +509,49 @@ void PixelPaintView::ResizeCanvas(int newWidth, int newHeight)
 // Save to TGA format
 bool PixelPaintView::SaveToTGA(const std::string& filename)
 {
+#if TARGET_OS_IOS || TARGET_OS_TV
+    // iOS: Create TGA data in memory and use share sheet
+    std::vector<uint8_t> tgaData;
+    
+    // TGA Header (18 bytes)
+    uint8_t header[18] = {0};
+    header[2] = 2; // Uncompressed true-color image
+    header[12] = canvasWidth & 0xFF;
+    header[13] = (canvasWidth >> 8) & 0xFF;
+    header[14] = canvasHeight & 0xFF;
+    header[15] = (canvasHeight >> 8) & 0xFF;
+    header[16] = 32; // 32 bits per pixel (RGBA)
+    header[17] = 0x20; // Top-left origin
+    
+    // Reserve space for header + pixel data
+    tgaData.reserve(18 + canvasData.size() * 4);
+    
+    // Add header
+    for (int i = 0; i < 18; i++) {
+        tgaData.push_back(header[i]);
+    }
+    
+    // Add pixel data (BGRA format for TGA)
+    for (int y = canvasHeight - 1; y >= 0; --y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            Pixel p = GetPixel(x, y);
+            tgaData.push_back(p.b);
+            tgaData.push_back(p.g);
+            tgaData.push_back(p.r);
+            tgaData.push_back(p.a);
+        }
+    }
+    
+    // Use iOS share sheet
+    if (iOS_SaveFile(filename.c_str(), tgaData.data(), tgaData.size())) {
+        std::cout << "Presented iOS share sheet for: " << filename << std::endl;
+        return true;
+    } else {
+        std::cerr << "Failed to present share sheet" << std::endl;
+        return false;
+    }
+#else
+    // Desktop: Direct file system save
     std::ofstream file(filename, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "Failed to open file for writing: " << filename << std::endl;
@@ -440,20 +584,133 @@ bool PixelPaintView::SaveToTGA(const std::string& filename)
     file.close();
     std::cout << "Saved TGA: " << filename << std::endl;
     return true;
+#endif
 }
 
-// Save to PNG (stub - needs stb_image_write or SDL_image)
+// Save to PNG using stb_image_write
 bool PixelPaintView::SaveToPNG(const std::string& filename)
 {
-    std::cerr << "PNG export not yet implemented. Use TGA format or implement with stb_image_write." << std::endl;
-    return false;
+    // Create RGBA buffer for stb_image_write
+    std::vector<uint8_t> imageData(canvasWidth * canvasHeight * 4);
+    
+    for (int y = 0; y < canvasHeight; ++y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            int idx = y * canvasWidth + x;
+            Pixel p = canvasData[idx];
+            int bufIdx = idx * 4;
+            
+            imageData[bufIdx + 0] = p.r;
+            imageData[bufIdx + 1] = p.g;
+            imageData[bufIdx + 2] = p.b;
+            imageData[bufIdx + 3] = p.a;  // PNG supports transparency
+        }
+    }
+    
+    // Write PNG with stride (bytes per row)
+    int result = stbi_write_png(filename.c_str(), canvasWidth, canvasHeight, 4, 
+                                 imageData.data(), canvasWidth * 4);
+    
+    if (result) {
+        std::cout << "Saved PNG: " << filename << std::endl;
+        return true;
+    } else {
+        std::cerr << "Failed to save PNG: " << filename << std::endl;
+        return false;
+    }
 }
 
-// Load from image (stub - needs stb_image or SDL_image)
+// Save to JPEG using stb_image_write
+bool PixelPaintView::SaveToJPEG(const std::string& filename, int quality)
+{
+    // Create RGB buffer for JPEG (no alpha channel)
+    std::vector<uint8_t> imageData(canvasWidth * canvasHeight * 3);
+    
+    for (int y = 0; y < canvasHeight; ++y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            int idx = y * canvasWidth + x;
+            Pixel p = canvasData[idx];
+            int bufIdx = idx * 3;
+            
+            // JPEG doesn't support transparency, blend with white background
+            if (p.a < 255) {
+                float alpha = p.a / 255.0f;
+                imageData[bufIdx + 0] = static_cast<uint8_t>(p.r * alpha + 255 * (1 - alpha));
+                imageData[bufIdx + 1] = static_cast<uint8_t>(p.g * alpha + 255 * (1 - alpha));
+                imageData[bufIdx + 2] = static_cast<uint8_t>(p.b * alpha + 255 * (1 - alpha));
+            } else {
+                imageData[bufIdx + 0] = p.r;
+                imageData[bufIdx + 1] = p.g;
+                imageData[bufIdx + 2] = p.b;
+            }
+        }
+    }
+    
+    // Write JPEG with quality setting (1-100)
+    int result = stbi_write_jpg(filename.c_str(), canvasWidth, canvasHeight, 3, 
+                                 imageData.data(), quality);
+    
+    if (result) {
+        std::cout << "Saved JPEG: " << filename << " (quality: " << quality << ")" << std::endl;
+        return true;
+    } else {
+        std::cerr << "Failed to save JPEG: " << filename << std::endl;
+        return false;
+    }
+}
+
+// Load from image using stb_image (supports PNG, JPG, BMP, TGA, etc.)
 bool PixelPaintView::LoadFromImage(const std::string& filename)
 {
-    std::cerr << "Image import not yet implemented. Implement with stb_image or SDL_image." << std::endl;
-    return false;
+    int width, height, channels;
+    
+    // Load image with stb_image, requesting RGBA format
+    unsigned char* data = stbi_load(filename.c_str(), &width, &height, &channels, 4);
+    
+    if (!data) {
+        std::cerr << "Failed to load image: " << filename << std::endl;
+        std::cerr << "stbi_failure_reason: " << stbi_failure_reason() << std::endl;
+        return false;
+    }
+    
+    std::cout << "Loaded image: " << filename << " (" << width << "x" << height << ", " << channels << " channels)" << std::endl;
+    
+    // Save undo state before modifying
+    PushUndo("Load image");
+    
+    // Resize canvas if needed
+    if (width != canvasWidth || height != canvasHeight) {
+        canvasWidth = width;
+        canvasHeight = height;
+        canvasSize = ImVec2(static_cast<float>(canvasWidth), static_cast<float>(canvasHeight));
+        canvasData.resize(canvasWidth * canvasHeight);
+        
+        // Recreate texture with new size
+        DestroyTexture();
+        InitializeTexture();
+    }
+    
+    // Copy pixel data (stb_image returns RGBA after we requested 4 channels)
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int srcIdx = (y * width + x) * 4;
+            int dstIdx = y * width + x;
+            
+            canvasData[dstIdx] = Pixel(
+                data[srcIdx + 0],  // R
+                data[srcIdx + 1],  // G
+                data[srcIdx + 2],  // B
+                data[srcIdx + 3]   // A (transparency preserved)
+            );
+        }
+    }
+    
+    // Free stb_image data
+    stbi_image_free(data);
+    
+    textureNeedsUpdate = true;
+    
+    std::cout << "Image loaded successfully with transparency support" << std::endl;
+    return true;
 }
 
 // Save binary format
@@ -558,8 +815,10 @@ void PixelPaintView::HandleCanvasInput()
     // Continue drawing
     if (isDrawing && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if (currentTool == DrawTool::Pencil || currentTool == DrawTool::Eraser) {
-            Pixel drawColor = currentTool == DrawTool::Eraser ? 
-                             Pixel(30, 30, 30, 255) : currentColor;
+            Pixel drawColor = currentColor;
+            if (currentTool == DrawTool::Eraser) {
+                drawColor = eraserUseAlpha ? Pixel(0, 0, 0, 0) : eraserColor;
+            }
             
             // Draw line from last point to current point for smooth strokes
             DrawLineBresenham(
@@ -578,9 +837,23 @@ void PixelPaintView::HandleCanvasInput()
         isDrawing = false;
     }
     
-    // Zoom with mouse wheel
-    if (io.MouseWheel != 0 && io.KeyCtrl) {
-        canvasScale = std::clamp(canvasScale + io.MouseWheel * 0.1f, 0.1f, 10.0f);
+    // Zoom with mouse wheel (centered on mouse position)
+    if (io.MouseWheel != 0.0f && (io.KeyCtrl || io.KeySuper)) {
+        ImVec2 mousePosOnCanvas = ScreenToCanvas(mousePos);
+        float oldScale = canvasScale;
+        
+        // The zoom increment is proportional to the current scale, which feels more natural
+        canvasScale = std::clamp(canvasScale + io.MouseWheel * 0.1f * canvasScale, 0.1f, 20.0f);
+        
+        // Adjust scroll offset to keep the point under the mouse stationary
+        scrollOffset.x += (mousePosOnCanvas.x * (oldScale - canvasScale));
+        scrollOffset.y += (mousePosOnCanvas.y * (oldScale - canvasScale));
+    }
+
+    // Pan with middle mouse button
+    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+        scrollOffset.x += io.MouseDelta.x;
+        scrollOffset.y += io.MouseDelta.y;
     }
 }
 
@@ -667,59 +940,110 @@ void PixelPaintView::DrawColorPicker()
 void PixelPaintView::DrawPaletteSelector()
 {
     ImGui::Separator();
-    ImGui::Checkbox("Use Palette", &paletteEnabled);
+    ImGui::Text("Color Palette");
+    ImGui::Separator();
     
-    if (paletteEnabled) {
-        ImGui::SameLine();
-        ImGui::Checkbox("Live Dithering", &ditheringEnabled);
-        
-        const char* preview = selectedPaletteIndex >= 0 ? 
-            availablePalettes[selectedPaletteIndex].name.c_str() : "None";
-        
-        if (ImGui::BeginCombo("Palette", preview)) {
-            for (size_t i = 0; i < availablePalettes.size(); ++i) {
-                bool isSelected = (selectedPaletteIndex == static_cast<int>(i));
-                if (ImGui::Selectable(availablePalettes[i].name.c_str(), isSelected)) {
-                    selectedPaletteIndex = static_cast<int>(i);
-                }
-                if (isSelected) {
-                    ImGui::SetItemDefaultFocus();
-                }
-            }
-            ImGui::EndCombo();
+    const char* preview = selectedPaletteIndex >= 0 ? 
+        availablePalettes[selectedPaletteIndex].name.c_str() : "No Palette (Full Color)";
+    
+    if (ImGui::BeginCombo("Palette", preview)) {
+        // "No Palette" option
+        bool isSelected = (selectedPaletteIndex == -1);
+        if (ImGui::Selectable("No Palette (Full Color)", isSelected)) {
+            selectedPaletteIndex = -1;
+            paletteEnabled = false;
+        }
+        if (isSelected) {
+            ImGui::SetItemDefaultFocus();
         }
         
-        // Show palette colors
-        if (selectedPaletteIndex >= 0) {
-            ImGui::Text("Palette Colors:");
-            const auto& palette = availablePalettes[selectedPaletteIndex].colors;
+        ImGui::Separator();
+        
+        // Available palettes
+        for (size_t i = 0; i < availablePalettes.size(); ++i) {
+            isSelected = (selectedPaletteIndex == static_cast<int>(i));
             
-            for (size_t i = 0; i < palette.size(); ++i) {
-                if (i > 0 && i % 16 != 0) ImGui::SameLine();
-                
-                ImVec4 col = ImVec4(
-                    palette[i].r / 255.0f,
-                    palette[i].g / 255.0f,
-                    palette[i].b / 255.0f,
-                    1.0f
-                );
-                
-                ImGui::PushID(static_cast<int>(i));
-                if (ImGui::ColorButton("##palettecolor", col, 0, ImVec2(20, 20))) {
-                    currentColor = palette[i];
-                }
-                ImGui::PopID();
-            }
+            std::string label = availablePalettes[i].name + " (" + 
+                               std::to_string(availablePalettes[i].colors.size()) + " colors)";
             
-            ImGui::Separator();
-            if (ImGui::Button("Apply Palette")) {
-                ApplyPalette(palette);
+            if (ImGui::Selectable(label.c_str(), isSelected)) {
+                selectedPaletteIndex = static_cast<int>(i);
+                paletteEnabled = true;
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Apply with Dithering")) {
-                ApplyFloydSteinbergDithering(palette);
+            if (isSelected) {
+                ImGui::SetItemDefaultFocus();
             }
         }
+        ImGui::EndCombo();
+    }
+    
+    // Show palette colors and options
+    if (selectedPaletteIndex >= 0 && selectedPaletteIndex < static_cast<int>(availablePalettes.size())) {
+        const auto& palette = availablePalettes[selectedPaletteIndex].colors;
+        
+        ImGui::Separator();
+        ImGui::Text("Colors (%zu):", palette.size());
+        
+        // Display palette colors in a grid
+        int colorsPerRow = 16;
+        for (size_t i = 0; i < palette.size(); ++i) {
+            if (i > 0 && i % colorsPerRow != 0) ImGui::SameLine();
+            
+            ImVec4 col = ImVec4(
+                palette[i].r / 255.0f,
+                palette[i].g / 255.0f,
+                palette[i].b / 255.0f,
+                palette[i].a / 255.0f
+            );
+            
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::ColorButton("##palettecolor", col, 
+                ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoPicker, 
+                ImVec2(20, 20))) {
+                currentColor = palette[i];
+            }
+            // Show tooltip with color info
+            if (ImGui::IsItemHovered()) {
+                ImGui::BeginTooltip();
+                ImGui::Text("RGB: (%d, %d, %d)", palette[i].r, palette[i].g, palette[i].b);
+                ImGui::Text("Click to set as current color");
+                ImGui::EndTooltip();
+            }
+            ImGui::PopID();
+        }
+        
+        ImGui::Separator();
+        ImGui::Text("Apply to Canvas:");
+        
+        // Apply palette options
+        if (ImGui::Button("Direct (Nearest Color)", ImVec2(-1, 0))) {
+            ApplyPalette(palette);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Converts each pixel to nearest palette color\nNo dithering - fast and clean");
+        }
+        
+        if (ImGui::Button("Floyd-Steinberg Dithering", ImVec2(-1, 0))) {
+            ApplyFloydSteinbergDithering(palette);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Error diffusion dithering\nBest quality for photos and gradients");
+        }
+        
+        if (ImGui::Button("Ordered Dithering", ImVec2(-1, 0))) {
+            ApplyOrderedDithering(palette);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Pattern-based dithering\nGood for pixel art and retro look");
+        }
+        
+        ImGui::Separator();
+        ImGui::Checkbox("Constrain Drawing to Palette", &paletteEnabled);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("When enabled, drawing tools will snap to palette colors");
+        }
+    } else {
+        ImGui::TextWrapped("Select a palette to constrain colors or apply color quantization.");
     }
 }
 
@@ -734,6 +1058,21 @@ void PixelPaintView::DrawBrushSettings()
     if (pressureSensitivityEnabled) {
         ImGui::Text("Pressure: %.2f", currentPressure);
     }
+
+    if (currentTool == DrawTool::Eraser) {
+        ImGui::Separator();
+        ImGui::Text("Eraser Settings");
+        ImGui::Checkbox("Use Alpha (Transparency)", &eraserUseAlpha);
+        if (!eraserUseAlpha) {
+            float col[4] = { eraserColor.r / 255.0f, eraserColor.g / 255.0f, eraserColor.b / 255.0f, eraserColor.a / 255.0f };
+            if (ImGui::ColorEdit4("Eraser Color", col)) {
+                eraserColor.r = static_cast<uint8_t>(col[0] * 255);
+                eraserColor.g = static_cast<uint8_t>(col[1] * 255);
+                eraserColor.b = static_cast<uint8_t>(col[2] * 255);
+                eraserColor.a = static_cast<uint8_t>(col[3] * 255);
+            }
+        }
+    }
 }
 
 // Draw canvas view
@@ -745,7 +1084,13 @@ void PixelPaintView::DrawCanvasView()
     canvasPos = ImGui::GetCursorScreenPos();
     
     // Draw canvas
+#if defined(USE_METAL_BACKEND)
+    if (metalTexture != nullptr) {
+        ImGui::Image(metalTexture, imageSize);
+    }
+#else
     ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(textureID)), imageSize);
+#endif
     
     // Draw grid overlay
     if (showGrid && canvasScale >= 2.0f) {
@@ -773,10 +1118,44 @@ void PixelPaintView::DrawCanvasView()
     HandleCanvasInput();
 }
 
+// Update the list of most frequently used colors in the image
+void PixelPaintView::UpdateFrequentColors()
+{
+    if (canvasData.empty()) {
+        frequentColors.clear();
+        return;
+    }
+    
+    // Count color occurrences
+    std::map<uint32_t, int> colorCount;
+    for (const auto& pixel : canvasData) {
+        uint32_t colorKey = (pixel.r << 24) | (pixel.g << 16) | (pixel.b << 8) | pixel.a;
+        colorCount[colorKey]++;
+    }
+    
+    // Sort by frequency
+    std::vector<std::pair<uint32_t, int>> sortedColors(colorCount.begin(), colorCount.end());
+    std::sort(sortedColors.begin(), sortedColors.end(),
+        [](const auto& a, const auto& b) { return a.second > b.second; });
+    
+    // Extract the top N colors
+    frequentColors.clear();
+    for (int i = 0; i < static_cast<int>(sortedColors.size()) && i < maxMostUsedColors; ++i) {
+        uint32_t colorKey = sortedColors[i].first;
+        Pixel pixel;
+        pixel.r = (colorKey >> 24) & 0xFF;
+        pixel.g = (colorKey >> 16) & 0xFF;
+        pixel.b = (colorKey >> 8) & 0xFF;
+        pixel.a = colorKey & 0xFF;
+        frequentColors.push_back(pixel);
+    }
+}
+
+
+
 // Draw status bar
 void PixelPaintView::DrawStatusBar()
 {
-    ImGui::Separator();
     ImGui::Text("Canvas: %dx%d | Zoom: %.1fx | Tool: %s | Undo: %zu | Redo: %zu",
         canvasWidth, canvasHeight, canvasScale,
         currentTool == DrawTool::Pencil ? "Pencil" :
@@ -791,7 +1170,7 @@ void PixelPaintView::DrawStatusBar()
 // Main draw function
 void PixelPaintView::Draw(std::string_view label)
 {
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse;
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
     
     ImVec2 screenSize = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowSize(screenSize);
@@ -800,6 +1179,21 @@ void PixelPaintView::Draw(std::string_view label)
     ImGui::Begin(label.data(), nullptr, windowFlags);
     
     HandleKeyboardShortcuts();
+    
+    // Update frequent colors from canvas before rendering
+    UpdateFrequentColors();
+    
+    // Custom status bar at the top (replacing the window header)
+    const float statusBarHeight = 25.0f;
+    ImGui::BeginChild("StatusBarTop", ImVec2(0, statusBarHeight), false, ImGuiWindowFlags_NoScrollbar);
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
+        DrawStatusBar();
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+    
+    ImGui::Separator();
     
     // Toolbar
     DrawToolbar();
@@ -811,6 +1205,55 @@ void PixelPaintView::Draw(std::string_view label)
     {
         DrawColorPicker();
         DrawPaletteSelector();
+        
+        // Collapsible Recent Colors section (only visible when Pencil tool is selected)
+        if (currentTool == DrawTool::Pencil) {
+            if (ImGui::CollapsingHeader("Recent Colors", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!frequentColors.empty()) {
+                    // Display colors in a compact grid (4 columns)
+                    int colsPerRow = 4;
+                    float colorButtonSize = 28.0f;
+                    
+                    for (size_t i = 0; i < frequentColors.size(); ++i) {
+                        const auto& color = frequentColors[i];
+                        
+                        // Convert Pixel to ImVec4 for button color
+                        ImVec4 buttonColor = ImVec4(
+                            color.r / 255.0f,
+                            color.g / 255.0f,
+                            color.b / 255.0f,
+                            color.a / 255.0f
+                        );
+                        
+                        // Create a unique ID for each color button
+                        ImGui::PushID(static_cast<int>(i));
+                        ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(buttonColor.x * 1.2f, buttonColor.y * 1.2f, buttonColor.z * 1.2f, buttonColor.w));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(buttonColor.x * 0.8f, buttonColor.y * 0.8f, buttonColor.z * 0.8f, buttonColor.w));
+                        
+                        if (ImGui::Button("##color", ImVec2(colorButtonSize, colorButtonSize))) {
+                            currentColor = color;
+                        }
+                        
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
+                        
+                        // Show tooltip with color info
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("R:%d G:%d B:%d A:%d", color.r, color.g, color.b, color.a);
+                        }
+                        
+                        // Layout: 4 columns per row
+                        if ((i + 1) % colsPerRow != 0 && i + 1 < frequentColors.size()) {
+                            ImGui::SameLine();
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled("(no colors yet)");
+                }
+            }
+        }
+        
         DrawBrushSettings();
         
         ImGui::Separator();
@@ -822,37 +1265,176 @@ void PixelPaintView::Draw(std::string_view label)
         ImGui::Separator();
         ImGui::Text("File Operations:");
         
+#if TARGET_OS_IOS || TARGET_OS_TV
+        // iOS: Share sheet buttons
         ImGui::InputText("Filename", filenameBuffer, sizeof(filenameBuffer));
         
-        if (ImGui::Button("Save TGA")) {
+        if (ImGui::Button("Share as TGA", ImVec2(-1, 0))) {
             std::string filename = std::string(filenameBuffer) + ".tga";
             SaveToTGA(filename);
         }
         
-        ImGui::SameLine();
-        if (ImGui::Button("Save Binary")) {
+        if (ImGui::Button("Share Binary", ImVec2(-1, 0))) {
             std::string filename = std::string(filenameBuffer) + ".pxl";
             SaveBinary(filename);
         }
         
-        if (ImGui::Button("Load Binary")) {
-            std::string filename = std::string(filenameBuffer) + ".pxl";
-            LoadBinary(filename);
+        if (ImGui::Button("Save to Files App", ImVec2(-1, 0))) {
+            std::string filename = std::string(filenameBuffer) + ".tga";
+            std::vector<uint8_t> tgaData;
+            uint8_t header[18] = {0};
+            header[2] = 2;
+            header[12] = canvasWidth & 0xFF;
+            header[13] = (canvasWidth >> 8) & 0xFF;
+            header[14] = canvasHeight & 0xFF;
+            header[15] = (canvasHeight >> 8) & 0xFF;
+            header[16] = 32;
+            header[17] = 0x20;
+            
+            tgaData.reserve(18 + canvasData.size() * 4);
+            for (int i = 0; i < 18; i++) tgaData.push_back(header[i]);
+            for (const auto& pixel : canvasData) {
+                tgaData.push_back(pixel.b);
+                tgaData.push_back(pixel.g);
+                tgaData.push_back(pixel.r);
+                tgaData.push_back(pixel.a);
+            }
+            
+            if (iOS_SaveToDocuments(filename.c_str(), tgaData.data(), tgaData.size())) {
+                std::cout << "Saved to app Documents folder (accessible via Files app)" << std::endl;
+            }
         }
+        
+        if (ImGui::Button("Open File Picker", ImVec2(-1, 0))) {
+            iOS_OpenFilePicker([](const char* path) {
+                std::cout << "Selected file: " << path << std::endl;
+                // TODO: Load the file
+            });
+        }
+#else
+        // Desktop: File dialog buttons
+        if (ImGui::Button("Save TGA...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SaveTGADialog", 
+                "Save TGA Image", 
+                ".tga", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite
+            );
+        }
+        
+        if (ImGui::Button("Save PNG...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SavePNGDialog", 
+                "Save PNG Image", 
+                ".png", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite
+            );
+        }
+        
+        if (ImGui::Button("Save Binary...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SaveBinaryDialog", 
+                "Save Binary File", 
+                ".pxl", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite
+            );
+        }
+        
+        if (ImGui::Button("Load Binary...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "LoadBinaryDialog", 
+                "Load Binary File", 
+                ".pxl", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal
+            );
+        }
+        
+        if (ImGui::Button("Load Image...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "LoadImageDialog", 
+                "Load Image", 
+                ".tga,.png,.jpg,.jpeg", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal
+            );
+        }
+#endif
     }
     ImGui::EndChild();
+    
+#if !TARGET_OS_IOS && !TARGET_OS_TV
+    // Handle file dialogs (desktop only)
+    ImVec2 dialogSize = ImVec2(800, 600);
+    ImVec2 dialogPos = ImVec2((screenSize.x - dialogSize.x) * 0.5f, (screenSize.y - dialogSize.y) * 0.5f);
+    
+    // Save TGA Dialog
+    if (ImGuiFileDialog::Instance()->Display("SaveTGADialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            SaveToTGA(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Save PNG Dialog
+    if (ImGuiFileDialog::Instance()->Display("SavePNGDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            SaveToPNG(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Save Binary Dialog
+    if (ImGuiFileDialog::Instance()->Display("SaveBinaryDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            SaveBinary(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Load Binary Dialog
+    if (ImGuiFileDialog::Instance()->Display("LoadBinaryDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            LoadBinary(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Load Image Dialog
+    if (ImGuiFileDialog::Instance()->Display("LoadImageDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            LoadFromImage(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+#endif
     
     ImGui::SameLine();
     
     // Main canvas area
-    ImGui::BeginChild("Canvas", ImVec2(0, -30), true);
+    ImGui::BeginChild("Canvas", ImVec2(0, 0), true);
     {
         DrawCanvasView();
     }
     ImGui::EndChild();
-    
-    // Status bar
-    DrawStatusBar();
     
     ImGui::End();
 }
