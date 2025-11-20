@@ -42,7 +42,7 @@ struct AppState
     SDL_Window* window = nullptr;
     bool quit = false;
     std::unique_ptr<PixelPaintView> pixelPaintView;
-    
+
 #if defined(USE_METAL_BACKEND)
     SDL_MetalView metalView = nullptr;
     id<MTLDevice> metalDevice = nil;
@@ -78,7 +78,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         WINDOW_HEIGHT,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
-    
+
     if (!g_AppState->window)
     {
         SDL_Log("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
@@ -139,7 +139,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         SDL_Log("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    
+
     SDL_GL_MakeCurrent(g_AppState->window, g_AppState->glContext);
     SDL_GL_SetSwapInterval(1); // Enable vsync
 #endif
@@ -148,14 +148,14 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
-    
+
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    
+
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
-    
+
     auto& style = ImGui::GetStyle();
     style.Colors[ImGuiCol_TableBorderStrong] = ImVec4(1.0, 1.0, 1.0, 1.0);
     style.Colors[ImGuiCol_TableBorderLight] = ImVec4(1.0, 1.0, 1.0, 1.0);
@@ -186,15 +186,15 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
     AppState* state = static_cast<AppState*>(appstate);
-    
+
     ImGui_ImplSDL3_ProcessEvent(event);
-    
+
     if (event->type == SDL_EVENT_QUIT)
     {
         state->quit = true;
         return SDL_APP_SUCCESS;
     }
-    
+
     if (event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
         event->window.windowID == SDL_GetWindowID(state->window))
     {
@@ -209,7 +209,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 SDL_AppResult SDL_AppIterate(void* appstate)
 {
     AppState* state = static_cast<AppState*>(appstate);
-    
+
     if (state->quit)
     {
         return SDL_APP_SUCCESS;
@@ -267,17 +267,17 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
     // Rendering
     ImGui::Render();
-    
+
     ImGuiIO& io = ImGui::GetIO();
     glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-    
+
     const ImVec4 clear_color = ImVec4(30.0f/255.0f, 30.0f/255.0f, 30.0f/255.0f, 1.00f);
-    glClearColor(clear_color.x * clear_color.w, 
-                 clear_color.y * clear_color.w, 
-                 clear_color.z * clear_color.w, 
+    glClearColor(clear_color.x * clear_color.w,
+                 clear_color.y * clear_color.w,
+                 clear_color.z * clear_color.w,
                  clear_color.w);
     glClear(GL_COLOR_BUFFER_BIT);
-    
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(state->window);
 #endif
@@ -289,7 +289,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 void SDL_AppQuit(void* appstate, SDL_AppResult result)
 {
     AppState* state = static_cast<AppState*>(appstate);
-    
+
     if (!state)
         return;
 
@@ -300,7 +300,7 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result)
     ImGui_ImplOpenGL3_Shutdown();
 #endif
     ImGui_ImplSDL3_Shutdown();
-    
+
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
 
