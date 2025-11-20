@@ -70,13 +70,13 @@ private:
     std::vector<Pixel> canvasData;
     
     // GPU texture handle (platform-specific)
-    unsigned int textureID = 0;
-    bool textureNeedsUpdate = true;
-    
 #if defined(USE_METAL_BACKEND)
-    // Cached Metal device to avoid recreating every frame
-    void* metalDevice = nullptr;  // id<MTLDevice> stored as void*
+    void* metalTexture = nullptr;  // id<MTLTexture> stored as void*
+    void* metalDevice = nullptr;   // id<MTLDevice> stored as void*
+#else
+    unsigned int textureID = 0;
 #endif
+    bool textureNeedsUpdate = true;
     
     // Texture management
     void InitializeTexture();

@@ -32,22 +32,15 @@ PixelPaintView::PixelPaintView()
 PixelPaintView::~PixelPaintView()
 {
     DestroyTexture();
-#if defined(USE_METAL_BACKEND)
-    // Release cached Metal device
-    if (metalDevice) {
-        CFRelease(metalDevice);
-        metalDevice = nullptr;
-    }
-#endif
 }
 
 // Initialize texture
 void PixelPaintView::InitializeTexture()
 {
 #if defined(USE_METAL_BACKEND)
-    // Metal texture will be created on first update
-    textureID = 0;
-    textureNeedsUpdate = true;
+    // Metal texture will be created when device is set
+    metalTexture = nullptr;
+    textureNeedsUpdate = false;  // Don't try to update until device is set
 #else
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_2D, textureID);
@@ -63,13 +56,10 @@ void PixelPaintView::InitializeTexture()
 // Set Metal device (called from main)
 void PixelPaintView::SetMetalDevice(void* device)
 {
-    if (metalDevice && metalDevice != device) {
-        CFRelease(metalDevice);
-    }
+    // Just store the pointer - main app owns the device lifetime
     metalDevice = device;
-    if (metalDevice) {
-        CFRetain(metalDevice);
-    }
+    // Trigger texture creation now that we have a device
+    textureNeedsUpdate = true;
 }
 #endif
 
@@ -83,46 +73,54 @@ void PixelPaintView::UpdateTexture()
         // Use cached Metal device (set from main)
         id<MTLDevice> device = (__bridge id<MTLDevice>)metalDevice;
         if (!device) {
-            // Fallback: create device if not set (should not happen in normal use)
-            device = MTLCreateSystemDefaultDevice();
-            metalDevice = (__bridge_retained void*)device;
-        }
-        if (!device) {
-            std::cerr << "Metal device not available" << std::endl;
+            std::cerr << "Metal device not set - call SetMetalDevice() first" << std::endl;
             return;
         }
         
-        // Create texture descriptor
-        MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                                                     width:canvasWidth
-                                                                                                    height:canvasHeight
-                                                                                                 mipmapped:NO];
-        textureDescriptor.usage = MTLTextureUsageShaderRead;
-        textureDescriptor.storageMode = MTLStorageModeManaged;
-        
-        // Create or recreate texture
         id<MTLTexture> texture = nil;
-        if (textureID != 0) {
-            texture = (__bridge id<MTLTexture>)(void*)textureID;
+        
+        // Check if we need to create a new texture (first time or size change)
+        bool needsNewTexture = (metalTexture == nullptr);
+        
+        if (metalTexture != nullptr) {
+            texture = (__bridge id<MTLTexture>)metalTexture;
+            // Check if size changed
+            if (texture.width != canvasWidth || texture.height != canvasHeight) {
+                needsNewTexture = true;
+                // Release old texture
+                (__bridge_transfer id<MTLTexture>)metalTexture;
+                metalTexture = nullptr;
+                texture = nil;
+            }
         }
         
-        // Always create new texture for size changes
-        texture = [device newTextureWithDescriptor:textureDescriptor];
-        
-        if (!texture) {
-            std::cerr << "Failed to create Metal texture" << std::endl;
-            return;
+        if (needsNewTexture) {
+            // Create new texture
+            MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                                         width:canvasWidth
+                                                                                                        height:canvasHeight
+                                                                                                     mipmapped:NO];
+            textureDescriptor.usage = MTLTextureUsageShaderRead;
+            textureDescriptor.storageMode = MTLStorageModeManaged;
+            
+            texture = [device newTextureWithDescriptor:textureDescriptor];
+            
+            if (!texture) {
+                std::cerr << "Failed to create Metal texture" << std::endl;
+                return;
+            }
+            
+            // Store texture pointer with retained ownership
+            metalTexture = (__bridge_retained void*)texture;
         }
         
-        // Upload pixel data
+        // Upload/update pixel data
         MTLRegion region = MTLRegionMake2D(0, 0, canvasWidth, canvasHeight);
         [texture replaceRegion:region
                    mipmapLevel:0
                      withBytes:canvasData.data()
                    bytesPerRow:canvasWidth * 4];
         
-        // Store texture pointer
-        textureID = (unsigned int)(uintptr_t)(__bridge_retained void*)texture;
         textureNeedsUpdate = false;
     }
 #else
@@ -137,10 +135,10 @@ void PixelPaintView::UpdateTexture()
 void PixelPaintView::DestroyTexture()
 {
 #if defined(USE_METAL_BACKEND)
-    if (textureID != 0) {
-        id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)(void*)textureID;
+    if (metalTexture != nullptr) {
+        id<MTLTexture> texture = (__bridge_transfer id<MTLTexture>)metalTexture;
         texture = nil;
-        textureID = 0;
+        metalTexture = nullptr;
     }
 #else
     if (textureID != 0) {
@@ -834,8 +832,8 @@ void PixelPaintView::DrawCanvasView()
     
     // Draw canvas
 #if defined(USE_METAL_BACKEND)
-    if (textureID != 0) {
-        ImGui::Image((__bridge void*)(id<MTLTexture>)(void*)textureID, imageSize);
+    if (metalTexture != nullptr) {
+        ImGui::Image(metalTexture, imageSize);
     }
 #else
     ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(textureID)), imageSize);
