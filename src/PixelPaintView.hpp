@@ -117,6 +117,7 @@ private:
     // File I/O
     bool SaveToTGA(const std::string& filename);
     bool SaveToPNG(const std::string& filename);
+    bool SaveToJPEG(const std::string& filename, int quality = 90);
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
@@ -131,6 +132,10 @@ private:
     DrawTool currentTool = DrawTool::Pencil;
     Pixel currentColor = Pixel(255, 255, 255, 255);
     BrushSettings brushSettings;
+
+    // Eraser state
+    bool eraserUseAlpha = true;
+    Pixel eraserColor = Pixel(255, 0, 255, 255); // Hot pink for visibility
     
     // Tool-specific state
     bool isDrawing = false;
