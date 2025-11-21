@@ -1,4 +1,5 @@
 #include "PixelPaintView.hpp"
+#include "ImGuiFileDialog.h"
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -14,6 +15,13 @@
     #include <SDL3/SDL_opengles2.h>
 #else
     #include <SDL3/SDL_opengl.h>
+#endif
+
+#ifdef __APPLE__
+    #include <TargetConditionals.h>
+    #if TARGET_OS_IOS || TARGET_OS_TV
+        #include "IOSFileManager.h"
+    #endif
 #endif
 
 namespace fs = std::filesystem;
@@ -494,6 +502,49 @@ void PixelPaintView::ResizeCanvas(int newWidth, int newHeight)
 // Save to TGA format
 bool PixelPaintView::SaveToTGA(const std::string& filename)
 {
+#if TARGET_OS_IOS || TARGET_OS_TV
+    // iOS: Create TGA data in memory and use share sheet
+    std::vector<uint8_t> tgaData;
+    
+    // TGA Header (18 bytes)
+    uint8_t header[18] = {0};
+    header[2] = 2; // Uncompressed true-color image
+    header[12] = canvasWidth & 0xFF;
+    header[13] = (canvasWidth >> 8) & 0xFF;
+    header[14] = canvasHeight & 0xFF;
+    header[15] = (canvasHeight >> 8) & 0xFF;
+    header[16] = 32; // 32 bits per pixel (RGBA)
+    header[17] = 0x20; // Top-left origin
+    
+    // Reserve space for header + pixel data
+    tgaData.reserve(18 + canvasData.size() * 4);
+    
+    // Add header
+    for (int i = 0; i < 18; i++) {
+        tgaData.push_back(header[i]);
+    }
+    
+    // Add pixel data (BGRA format for TGA)
+    for (int y = canvasHeight - 1; y >= 0; --y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            Pixel p = GetPixel(x, y);
+            tgaData.push_back(p.b);
+            tgaData.push_back(p.g);
+            tgaData.push_back(p.r);
+            tgaData.push_back(p.a);
+        }
+    }
+    
+    // Use iOS share sheet
+    if (iOS_SaveFile(filename.c_str(), tgaData.data(), tgaData.size())) {
+        std::cout << "Presented iOS share sheet for: " << filename << std::endl;
+        return true;
+    } else {
+        std::cerr << "Failed to present share sheet" << std::endl;
+        return false;
+    }
+#else
+    // Desktop: Direct file system save
     std::ofstream file(filename, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "Failed to open file for writing: " << filename << std::endl;
@@ -526,6 +577,7 @@ bool PixelPaintView::SaveToTGA(const std::string& filename)
     file.close();
     std::cout << "Saved TGA: " << filename << std::endl;
     return true;
+#endif
 }
 
 // Save to PNG (stub - needs stb_image_write or SDL_image)
@@ -914,25 +966,146 @@ void PixelPaintView::Draw(std::string_view label)
         ImGui::Separator();
         ImGui::Text("File Operations:");
         
+#if TARGET_OS_IOS || TARGET_OS_TV
+        // iOS: Share sheet buttons
         ImGui::InputText("Filename", filenameBuffer, sizeof(filenameBuffer));
         
-        if (ImGui::Button("Save TGA")) {
+        if (ImGui::Button("Share as TGA", ImVec2(-1, 0))) {
             std::string filename = std::string(filenameBuffer) + ".tga";
             SaveToTGA(filename);
         }
         
-        ImGui::SameLine();
-        if (ImGui::Button("Save Binary")) {
+        if (ImGui::Button("Share Binary", ImVec2(-1, 0))) {
             std::string filename = std::string(filenameBuffer) + ".pxl";
             SaveBinary(filename);
         }
         
-        if (ImGui::Button("Load Binary")) {
-            std::string filename = std::string(filenameBuffer) + ".pxl";
-            LoadBinary(filename);
+        if (ImGui::Button("Save to Files App", ImVec2(-1, 0))) {
+            std::string filename = std::string(filenameBuffer) + ".tga";
+            std::vector<uint8_t> tgaData;
+            uint8_t header[18] = {0};
+            header[2] = 2;
+            header[12] = canvasWidth & 0xFF;
+            header[13] = (canvasWidth >> 8) & 0xFF;
+            header[14] = canvasHeight & 0xFF;
+            header[15] = (canvasHeight >> 8) & 0xFF;
+            header[16] = 32;
+            header[17] = 0x20;
+            
+            tgaData.reserve(18 + canvasData.size() * 4);
+            for (int i = 0; i < 18; i++) tgaData.push_back(header[i]);
+            for (const auto& pixel : canvasData) {
+                tgaData.push_back(pixel.b);
+                tgaData.push_back(pixel.g);
+                tgaData.push_back(pixel.r);
+                tgaData.push_back(pixel.a);
+            }
+            
+            if (iOS_SaveToDocuments(filename.c_str(), tgaData.data(), tgaData.size())) {
+                std::cout << "Saved to app Documents folder (accessible via Files app)" << std::endl;
+            }
         }
+        
+        if (ImGui::Button("Open File Picker", ImVec2(-1, 0))) {
+            iOS_OpenFilePicker([](const char* path) {
+                std::cout << "Selected file: " << path << std::endl;
+                // TODO: Load the file
+            });
+        }
+#else
+        // Desktop: File dialog buttons
+        if (ImGui::Button("Save TGA...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SaveTGADialog", 
+                "Save TGA Image", 
+                ".tga", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite
+            );
+        }
+        
+        if (ImGui::Button("Save Binary...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SaveBinaryDialog", 
+                "Save Binary File", 
+                ".pxl", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite
+            );
+        }
+        
+        if (ImGui::Button("Load Binary...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "LoadBinaryDialog", 
+                "Load Binary File", 
+                ".pxl", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal
+            );
+        }
+        
+        if (ImGui::Button("Load Image...", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "LoadImageDialog", 
+                "Load Image", 
+                ".tga,.png,.jpg,.jpeg", 
+                ".",
+                1,
+                nullptr,
+                ImGuiFileDialogFlags_Modal
+            );
+        }
+#endif
     }
     ImGui::EndChild();
+    
+#if !TARGET_OS_IOS && !TARGET_OS_TV
+    // Handle file dialogs (desktop only)
+    ImVec2 dialogSize = ImVec2(800, 600);
+    ImVec2 dialogPos = ImVec2((screenSize.x - dialogSize.x) * 0.5f, (screenSize.y - dialogSize.y) * 0.5f);
+    
+    // Save TGA Dialog
+    if (ImGuiFileDialog::Instance()->Display("SaveTGADialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            SaveToTGA(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Save Binary Dialog
+    if (ImGuiFileDialog::Instance()->Display("SaveBinaryDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            SaveBinary(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Load Binary Dialog
+    if (ImGuiFileDialog::Instance()->Display("LoadBinaryDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            LoadBinary(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    
+    // Load Image Dialog
+    if (ImGuiFileDialog::Instance()->Display("LoadImageDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string filePath = ImGuiFileDialog::Instance()->GetFilePathName();
+            LoadFromImage(filePath);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+#endif
     
     ImGui::SameLine();
     
