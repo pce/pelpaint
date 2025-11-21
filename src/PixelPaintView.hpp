@@ -150,6 +150,11 @@ private:
     bool paletteEnabled = false;
     bool ditheringEnabled = false;
     
+    // Color picker panel - most frequently used colors
+    std::vector<Pixel> frequentColors;
+    int maxMostUsedColors = 16;
+    void UpdateFrequentColors();
+    
     // Apple Pencil / Pressure sensitivity
     float currentPressure = 1.0f;
     bool pressureSensitivityEnabled = true;

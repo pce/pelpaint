@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <queue>
+#include <map>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
@@ -1117,10 +1118,44 @@ void PixelPaintView::DrawCanvasView()
     HandleCanvasInput();
 }
 
+// Update the list of most frequently used colors in the image
+void PixelPaintView::UpdateFrequentColors()
+{
+    if (canvasData.empty()) {
+        frequentColors.clear();
+        return;
+    }
+    
+    // Count color occurrences
+    std::map<uint32_t, int> colorCount;
+    for (const auto& pixel : canvasData) {
+        uint32_t colorKey = (pixel.r << 24) | (pixel.g << 16) | (pixel.b << 8) | pixel.a;
+        colorCount[colorKey]++;
+    }
+    
+    // Sort by frequency
+    std::vector<std::pair<uint32_t, int>> sortedColors(colorCount.begin(), colorCount.end());
+    std::sort(sortedColors.begin(), sortedColors.end(),
+        [](const auto& a, const auto& b) { return a.second > b.second; });
+    
+    // Extract the top N colors
+    frequentColors.clear();
+    for (int i = 0; i < static_cast<int>(sortedColors.size()) && i < maxMostUsedColors; ++i) {
+        uint32_t colorKey = sortedColors[i].first;
+        Pixel pixel;
+        pixel.r = (colorKey >> 24) & 0xFF;
+        pixel.g = (colorKey >> 16) & 0xFF;
+        pixel.b = (colorKey >> 8) & 0xFF;
+        pixel.a = colorKey & 0xFF;
+        frequentColors.push_back(pixel);
+    }
+}
+
+
+
 // Draw status bar
 void PixelPaintView::DrawStatusBar()
 {
-    ImGui::Separator();
     ImGui::Text("Canvas: %dx%d | Zoom: %.1fx | Tool: %s | Undo: %zu | Redo: %zu",
         canvasWidth, canvasHeight, canvasScale,
         currentTool == DrawTool::Pencil ? "Pencil" :
@@ -1135,7 +1170,7 @@ void PixelPaintView::DrawStatusBar()
 // Main draw function
 void PixelPaintView::Draw(std::string_view label)
 {
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse;
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
     
     ImVec2 screenSize = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowSize(screenSize);
@@ -1144,6 +1179,21 @@ void PixelPaintView::Draw(std::string_view label)
     ImGui::Begin(label.data(), nullptr, windowFlags);
     
     HandleKeyboardShortcuts();
+    
+    // Update frequent colors from canvas before rendering
+    UpdateFrequentColors();
+    
+    // Custom status bar at the top (replacing the window header)
+    const float statusBarHeight = 25.0f;
+    ImGui::BeginChild("StatusBarTop", ImVec2(0, statusBarHeight), false, ImGuiWindowFlags_NoScrollbar);
+    {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
+        DrawStatusBar();
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+    
+    ImGui::Separator();
     
     // Toolbar
     DrawToolbar();
@@ -1155,6 +1205,55 @@ void PixelPaintView::Draw(std::string_view label)
     {
         DrawColorPicker();
         DrawPaletteSelector();
+        
+        // Collapsible Recent Colors section (only visible when Pencil tool is selected)
+        if (currentTool == DrawTool::Pencil) {
+            if (ImGui::CollapsingHeader("Recent Colors", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (!frequentColors.empty()) {
+                    // Display colors in a compact grid (4 columns)
+                    int colsPerRow = 4;
+                    float colorButtonSize = 28.0f;
+                    
+                    for (size_t i = 0; i < frequentColors.size(); ++i) {
+                        const auto& color = frequentColors[i];
+                        
+                        // Convert Pixel to ImVec4 for button color
+                        ImVec4 buttonColor = ImVec4(
+                            color.r / 255.0f,
+                            color.g / 255.0f,
+                            color.b / 255.0f,
+                            color.a / 255.0f
+                        );
+                        
+                        // Create a unique ID for each color button
+                        ImGui::PushID(static_cast<int>(i));
+                        ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(buttonColor.x * 1.2f, buttonColor.y * 1.2f, buttonColor.z * 1.2f, buttonColor.w));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(buttonColor.x * 0.8f, buttonColor.y * 0.8f, buttonColor.z * 0.8f, buttonColor.w));
+                        
+                        if (ImGui::Button("##color", ImVec2(colorButtonSize, colorButtonSize))) {
+                            currentColor = color;
+                        }
+                        
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
+                        
+                        // Show tooltip with color info
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("R:%d G:%d B:%d A:%d", color.r, color.g, color.b, color.a);
+                        }
+                        
+                        // Layout: 4 columns per row
+                        if ((i + 1) % colsPerRow != 0 && i + 1 < frequentColors.size()) {
+                            ImGui::SameLine();
+                        }
+                    }
+                } else {
+                    ImGui::TextDisabled("(no colors yet)");
+                }
+            }
+        }
+        
         DrawBrushSettings();
         
         ImGui::Separator();
@@ -1331,14 +1430,11 @@ void PixelPaintView::Draw(std::string_view label)
     ImGui::SameLine();
     
     // Main canvas area
-    ImGui::BeginChild("Canvas", ImVec2(0, -30), true);
+    ImGui::BeginChild("Canvas", ImVec2(0, 0), true);
     {
         DrawCanvasView();
     }
     ImGui::EndChild();
-    
-    // Status bar
-    DrawStatusBar();
     
     ImGui::End();
 }
