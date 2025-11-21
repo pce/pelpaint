@@ -10,13 +10,19 @@
              |___|               :/   |______/             |___||___|    |___|  |___|
                                                                                  
                                                                            
-Fear changes, embrace the zen of no undo or redo, no layers... just one brush for digital artistry and exploration.
+Fear changes, embrace the zen of undo or redo, no layers... just one brush for digital artistry and exploration.
 
 Unleash your inner artist and embark on a journey of digital creativity with PixelPaint. This innovative painting application is more than just a canvas – it's a dynamic playground for artistic experimentation and expression.
 
 Dive into a user-friendly canvas with a range of intuitive tools at your fingertips. Whether you're a seasoned artist or just starting, PixelPaint offers a welcoming environment for all skill levels.
 
 Immersive Color Palette: Choose from a vibrant array of colors to add depth and personality to your artwork. Explore a world of hues to find the perfect shade for your masterpiece.
+
+
+## Example
+
+
+![Pixel Art](examples/Screenshot2025-11-21at 2.57.06AM_Pixel.png)
 
 
 ## Build
@@ -36,29 +42,9 @@ Immersive Color Palette: Choose from a vibrant array of colors to add depth and 
 
 
 
-Built with ❤️ using SDL3, Dear ImGui, and modern C++
 
 
-./scripts/dev.sh clean-macos
 
-./scripts/dev.sh clean-macos && cd build/macos-Release && cmake ../../ -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" -G "Xcode" > /dev/null 2>&1 && echo "CMake config successful" 
-
-
-mkdir -p build/macos-Release && cd build/macos-Release && cmake ../../ -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET="11.0" -G "Xcode" 2>&1 | grep -E "(error|Error|ERROR|Configuring|Generating done)" 
-
-
-cd build/macos-Release && cmake --build . --config Release 2>&1 | grep -E "(error|Error|ERROR|BUILD SUCCEEDED|BUILD FAILED|PixelPaint.app)" | head -20 
-
-
-In CMakeLists.txt adjust the path to vcpkg or install it with:
-
-    cd ../../
-    mkdir external && cd external 
-    gcl git@github.com:microsoft/vcpkg.git
-    # windows
-    .\vcpkg\bootstrap-vcpkg.bat 
-    # unix (linux, macos)
-    ./vcpkg/bootstrap-vcpkg.sh   
 
 ### Notes
 
@@ -66,13 +52,4 @@ This is a fun and educational project inspired by the 'Paint' Tutorial from dear
 ASCII Logo generated with http://patorjk.com/software/taag/#p=display&h=1&v=0&f=Stronger%20Than%20All&t=PixelPaint%0A
 
 
-## Example
-
-Imported Image with PointsDrawSize: 10 exported as JPG
-
-![CirclePixelated SciFi Hub](examples/ImportPointsSize10.jpg)
-
-Import Image (with Resize checked) and "Smart Repaint" exported as JPG
-
-![CirclePixelated SciFi Hub](examples/ImportSmartRepaint.jpg)
-
+Built with ❤️ using SDL3, Dear ImGui, and modern C++
