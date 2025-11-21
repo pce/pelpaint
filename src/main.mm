@@ -5,6 +5,7 @@
 #include <imgui.h>
 #include <implot.h>
 #include "ImGuiFileDialog.h"
+#include "ImGuiStyle.hpp"
 
 #if defined(USE_METAL_BACKEND)
     #include "imgui_impl_sdl3.h"
@@ -159,13 +160,9 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
-    // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
-    SDL_Log("ImGui setup complete\n");
-
-    auto& style = ImGui::GetStyle();
-    style.Colors[ImGuiCol_TableBorderStrong] = ImVec4(1.0, 1.0, 1.0, 1.0);
-    style.Colors[ImGuiCol_TableBorderLight] = ImVec4(1.0, 1.0, 1.0, 1.0);
+    // Setup Dear ImGui style - Unreal Engine theme
+    ImGuiTheme::SetupUnrealTheme();
+    SDL_Log("ImGui setup complete with Unreal theme\n");
 
     // Setup Platform/Renderer backends
 #if defined(USE_METAL_BACKEND)
