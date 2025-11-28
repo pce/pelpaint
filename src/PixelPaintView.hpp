@@ -38,7 +38,11 @@ enum class DrawTool {
     Line,
     Fill,
     Eyedropper,
-    Spray
+    Spray,
+    RectangleSelect,
+    CircleSelect,
+    BucketFill,
+    Clone
 };
 
 // Brush settings
@@ -47,6 +51,20 @@ struct BrushSettings {
     float pressure = 1.0f;  // For Apple Pencil/pressure-sensitive input
     float opacity = 1.0f;
     bool antialiased = false;
+    bool useStepping = false;  // Toggle between slider and input
+};
+
+// Selection data structure
+struct SelectionData {
+    std::vector<Pixel> pixels;
+    int width = 0;
+    int height = 0;
+    ImVec2 selectionStart;
+    ImVec2 selectionEnd;
+    ImVec2 sourceCenter;  // Center point for circular selection
+    bool isActive = false;
+    bool canBlur = false;
+    float blurAmount = 0.0f;
 };
 
 class PixelPaintView
@@ -149,6 +167,14 @@ private:
     std::vector<Pixel> customPalette;
     bool paletteEnabled = false;
     bool ditheringEnabled = false;
+    bool ditheringPreserveAlpha = true;  // Issue #3: Preserve alpha in dithering
+    
+    // Bucket fill threshold (Issue #4)
+    float bucketThreshold = 0.0f;
+    bool bucketEraseToAlpha = true;  // For eraser bucket tool
+    
+    // Selection data (Issue #2)
+    SelectionData currentSelection;
     
     // Color picker panel - most frequently used colors
     std::vector<Pixel> frequentColors;
@@ -176,6 +202,15 @@ private:
     ImVec2 ScreenToCanvas(const ImVec2& screenPos) const;
     ImVec2 CanvasToScreen(const ImVec2& canvasPos) const;
     int GetPixelIndex(int x, int y) const;
+    
+    // Selection operations (Issue #2)
+    void CopySelection(const ImVec2& startPoint, const ImVec2& endPoint, bool isCircle = false);
+    void PasteSelection(const ImVec2& pastePos);
+    void BlurSelection(float radius);
+    float ColorDistance(const Pixel& c1, const Pixel& c2) const;
+    
+    // Enhanced flood fill with threshold (Issue #4)
+    void FloodFillWithThreshold(int x, int y, const Pixel& fillColor, float threshold);
     
     // Options
     bool showGrid = false;

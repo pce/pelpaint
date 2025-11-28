@@ -293,6 +293,54 @@ void PixelPaintView::FloodFill(int x, int y, const Pixel& fillColor)
     }
 }
 
+// Issue #4: Enhanced flood fill with threshold support
+float PixelPaintView::ColorDistance(const Pixel& c1, const Pixel& c2) const
+{
+    // Calculate Euclidean distance in RGB space
+    float dr = static_cast<float>(c1.r) - static_cast<float>(c2.r);
+    float dg = static_cast<float>(c1.g) - static_cast<float>(c2.g);
+    float db = static_cast<float>(c1.b) - static_cast<float>(c2.b);
+    return std::sqrt(dr * dr + dg * dg + db * db);
+}
+
+// Issue #4: Flood fill with threshold for tolerance
+void PixelPaintView::FloodFillWithThreshold(int x, int y, const Pixel& fillColor, float threshold)
+{
+    if (!IsValidCoord(x, y)) return;
+    
+    Pixel targetColor = GetPixel(x, y);
+    if (targetColor == fillColor) return;
+    
+    std::queue<std::pair<int, int>> queue;
+    queue.push({x, y});
+    std::vector<bool> visited(canvasWidth * canvasHeight, false);
+    
+    while (!queue.empty()) {
+        auto [cx, cy] = queue.front();
+        queue.pop();
+        
+        if (!IsValidCoord(cx, cy)) continue;
+        
+        int idx = GetPixelIndex(cx, cy);
+        if (visited[idx]) continue;
+        
+        Pixel currentPixel = GetPixel(cx, cy);
+        float distance = ColorDistance(currentPixel, targetColor);
+        
+        // Check if pixel is within threshold
+        if (distance > threshold) continue;
+        
+        visited[idx] = true;
+        PutPixel(cx, cy, fillColor);
+        
+        // Add neighbors to queue
+        queue.push({cx + 1, cy});
+        queue.push({cx - 1, cy});
+        queue.push({cx, cy + 1});
+        queue.push({cx, cy - 1});
+    }
+}
+
 // Spray tool
 void PixelPaintView::DrawSpray(int x, int y, float radius, const Pixel& color, float density)
 {
@@ -307,6 +355,151 @@ void PixelPaintView::DrawSpray(int x, int y, float radius, const Pixel& color, f
         
         PutPixel(px, py, color);
     }
+}
+
+// Issue #2: Selection/Clone tool functions
+void PixelPaintView::CopySelection(const ImVec2& startPoint, const ImVec2& endPoint, bool isCircle)
+{
+    ImVec2 canvasStart = ScreenToCanvas(startPoint);
+    ImVec2 canvasEnd = ScreenToCanvas(endPoint);
+    
+    int x1 = static_cast<int>(std::min(canvasStart.x, canvasEnd.x));
+    int y1 = static_cast<int>(std::min(canvasStart.y, canvasEnd.y));
+    int x2 = static_cast<int>(std::max(canvasStart.x, canvasEnd.x));
+    int y2 = static_cast<int>(std::max(canvasStart.y, canvasEnd.y));
+    
+    int selWidth = x2 - x1 + 1;
+    int selHeight = y2 - y1 + 1;
+    
+    if (selWidth <= 0 || selHeight <= 0) return;
+    
+    currentSelection.width = selWidth;
+    currentSelection.height = selHeight;
+    currentSelection.selectionStart = ImVec2(static_cast<float>(x1), static_cast<float>(y1));
+    currentSelection.selectionEnd = ImVec2(static_cast<float>(x2), static_cast<float>(y2));
+    currentSelection.sourceCenter = ImVec2(
+        (canvasStart.x + canvasEnd.x) * 0.5f,
+        (canvasStart.y + canvasEnd.y) * 0.5f
+    );
+    
+    // Copy pixels from selection
+    currentSelection.pixels.clear();
+    currentSelection.pixels.reserve(selWidth * selHeight);
+    
+    for (int y = y1; y <= y2; ++y) {
+        for (int x = x1; x <= x2; ++x) {
+            if (isCircle) {
+                // Check if pixel is within circle
+                float cx = currentSelection.sourceCenter.x;
+                float cy = currentSelection.sourceCenter.y;
+                float dx = x - cx;
+                float dy = y - cy;
+                float radius = std::max(selWidth, selHeight) * 0.5f;
+                
+                if (dx * dx + dy * dy <= radius * radius && IsValidCoord(x, y)) {
+                    currentSelection.pixels.push_back(GetPixel(x, y));
+                } else {
+                    currentSelection.pixels.push_back(Pixel(0, 0, 0, 0)); // Transparent
+                }
+            } else {
+                // Rectangle selection
+                if (IsValidCoord(x, y)) {
+                    currentSelection.pixels.push_back(GetPixel(x, y));
+                } else {
+                    currentSelection.pixels.push_back(Pixel(0, 0, 0, 0));
+                }
+            }
+        }
+    }
+    
+    currentSelection.isActive = true;
+    PushUndo("Copy Selection");
+}
+
+void PixelPaintView::PasteSelection(const ImVec2& pastePos)
+{
+    if (!currentSelection.isActive || currentSelection.pixels.empty()) return;
+    
+    ImVec2 canvasPos = ScreenToCanvas(pastePos);
+    int startX = static_cast<int>(canvasPos.x - currentSelection.width * 0.5f);
+    int startY = static_cast<int>(canvasPos.y - currentSelection.height * 0.5f);
+    
+    PushUndo("Paste Selection");
+    
+    size_t pixelIdx = 0;
+    for (int y = startY; y < startY + currentSelection.height; ++y) {
+        for (int x = startX; x < startX + currentSelection.width; ++x) {
+            if (pixelIdx >= currentSelection.pixels.size()) break;
+            
+            const Pixel& srcPixel = currentSelection.pixels[pixelIdx++];
+            
+            // Only paste non-transparent pixels
+            if (srcPixel.a > 0 && IsValidCoord(x, y)) {
+                // Blend pixel based on opacity
+                if (srcPixel.a == 255) {
+                    PutPixel(x, y, srcPixel);
+                } else {
+                    Pixel dstPixel = GetPixel(x, y);
+                    float alpha = srcPixel.a / 255.0f;
+                    dstPixel.r = static_cast<uint8_t>(dstPixel.r * (1.0f - alpha) + srcPixel.r * alpha);
+                    dstPixel.g = static_cast<uint8_t>(dstPixel.g * (1.0f - alpha) + srcPixel.g * alpha);
+                    dstPixel.b = static_cast<uint8_t>(dstPixel.b * (1.0f - alpha) + srcPixel.b * alpha);
+                    PutPixel(x, y, dstPixel);
+                }
+            }
+        }
+    }
+    
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::BlurSelection(float radius)
+{
+    if (!currentSelection.isActive || currentSelection.pixels.empty()) return;
+    
+    PushUndo("Blur Selection");
+    
+    // Simple box blur on selection
+    int kernelSize = static_cast<int>(radius);
+    if (kernelSize < 1) kernelSize = 1;
+    
+    std::vector<Pixel> blurred = currentSelection.pixels;
+    
+    for (size_t i = 0; i < currentSelection.pixels.size(); ++i) {
+        int x = i % currentSelection.width;
+        int y = i / currentSelection.width;
+        
+        uint32_t r = 0, g = 0, b = 0, a = 0;
+        int count = 0;
+        
+        for (int dy = -kernelSize; dy <= kernelSize; ++dy) {
+            for (int dx = -kernelSize; dx <= kernelSize; ++dx) {
+                int nx = x + dx;
+                int ny = y + dy;
+                
+                if (nx >= 0 && nx < currentSelection.width && ny >= 0 && ny < currentSelection.height) {
+                    size_t idx = ny * currentSelection.width + nx;
+                    const Pixel& p = currentSelection.pixels[idx];
+                    r += p.r;
+                    g += p.g;
+                    b += p.b;
+                    a += p.a;
+                    count++;
+                }
+            }
+        }
+        
+        if (count > 0) {
+            blurred[i].r = static_cast<uint8_t>(r / count);
+            blurred[i].g = static_cast<uint8_t>(g / count);
+            blurred[i].b = static_cast<uint8_t>(b / count);
+            blurred[i].a = static_cast<uint8_t>(a / count);
+        }
+    }
+    
+    currentSelection.pixels = blurred;
+    currentSelection.canBlur = true;
+    currentSelection.blurAmount = radius;
 }
 
 // Apply palette to canvas
@@ -361,6 +554,10 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
             Pixel newPixel = FindNearestPaletteColor(oldPixel, palette);
             
             // 3. Update pixel with quantized color in temp buffer
+            // Issue #3: Preserve alpha channel if enabled
+            if (ditheringPreserveAlpha) {
+                newPixel.a = oldPixel.a;
+            }
             tempData[idx] = newPixel;
             
             // 4. Calculate quantization error
@@ -401,6 +598,7 @@ void PixelPaintView::ApplyOrderedDithering(const std::vector<Pixel>& palette)
     for (int y = 0; y < canvasHeight; ++y) {
         for (int x = 0; x < canvasWidth; ++x) {
             Pixel current = GetPixel(x, y);
+            uint8_t originalAlpha = current.a;  // Issue #3: Preserve alpha
             
             float threshold = bayerMatrix[y % 4][x % 4] - 0.5f;
             float factor = 32.0f; // Dithering strength
@@ -412,6 +610,12 @@ void PixelPaintView::ApplyOrderedDithering(const std::vector<Pixel>& palette)
             dithered.a = current.a;
             
             Pixel nearest = Pixel::FindNearest(dithered, palette);
+            
+            // Issue #3: Restore alpha if preserving
+            if (ditheringPreserveAlpha) {
+                nearest.a = originalAlpha;
+            }
+            
             PutPixel(x, y, nearest);
         }
     }
@@ -802,10 +1006,27 @@ void PixelPaintView::HandleCanvasInput()
             }
         } else if (currentTool == DrawTool::Fill) {
             PushUndo("Fill");
-            FloodFill(pixelX, pixelY, currentColor);
+            // Issue #4: Use threshold-based flood fill
+            FloodFillWithThreshold(pixelX, pixelY, currentColor, bucketThreshold);
+        } else if (currentTool == DrawTool::BucketFill) {
+            PushUndo("Bucket Fill");
+            FloodFillWithThreshold(pixelX, pixelY, currentColor, bucketThreshold);
         } else if (currentTool == DrawTool::Eyedropper) {
             if (IsValidCoord(pixelX, pixelY)) {
                 currentColor = GetPixel(pixelX, pixelY);
+            }
+        } else if (currentTool == DrawTool::RectangleSelect) {
+            // Issue #2: Start rectangle selection
+            lineStartPoint = ImVec2(mousePos);
+            isLineMode = true;
+        } else if (currentTool == DrawTool::CircleSelect) {
+            // Issue #2: Start circle selection
+            lineStartPoint = ImVec2(mousePos);
+            isLineMode = true;
+        } else if (currentTool == DrawTool::Clone) {
+            // Issue #2: Clone tool - check if we have a selection to paste
+            if (currentSelection.isActive) {
+                PasteSelection(mousePos);
             }
         } else {
             PushUndo("Draw");
@@ -829,12 +1050,29 @@ void PixelPaintView::HandleCanvasInput()
             lastDrawPoint = ImVec2(static_cast<float>(pixelX), static_cast<float>(pixelY));
         } else if (currentTool == DrawTool::Spray) {
             DrawSpray(pixelX, pixelY, brushSettings.size * 3.0f, currentColor, 0.3f);
+        } else if (currentTool == DrawTool::RectangleSelect || currentTool == DrawTool::CircleSelect) {
+            // Issue #2: Live preview of selection - just track mouse position
+            // Actual selection is made on mouse release
+        } else if (currentTool == DrawTool::Clone) {
+            // Issue #2: Clone tool continues pasting while dragging
+            if (currentSelection.isActive) {
+                PasteSelection(mousePos);
+            }
         }
     }
     
     // Stop drawing
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         isDrawing = false;
+        
+        // Issue #2: Complete selection on mouse release
+        if (currentTool == DrawTool::RectangleSelect && isLineMode) {
+            CopySelection(lineStartPoint, ImVec2(mousePos), false);
+            isLineMode = false;
+        } else if (currentTool == DrawTool::CircleSelect && isLineMode) {
+            CopySelection(lineStartPoint, ImVec2(mousePos), true);
+            isLineMode = false;
+        }
     }
     
     // Zoom with mouse wheel (centered on mouse position)
@@ -886,14 +1124,30 @@ void PixelPaintView::HandleKeyboardShortcuts()
     if (ImGui::IsKeyPressed(ImGuiKey_I)) {
         currentTool = DrawTool::Eyedropper;
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_S)) {
+        currentTool = DrawTool::Spray;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_C)) {
+        currentTool = DrawTool::Clone;  // Issue #2: Clone/Stamp tool shortcut
+    }
 }
 
 // Draw toolbar
 void PixelPaintView::DrawToolbar()
 {
-    const char* toolNames[] = {"Pencil (P)", "Eraser (E)", "Line (L)", "Fill (F)", "Eyedropper (I)", "Spray"};
+    const char* toolNames[] = {
+        "Pencil (P)", 
+        "Eraser (E)", 
+        "Line (L)", 
+        "Fill (F)", 
+        "Eyedropper (I)", 
+        "Spray (S)",
+        "Rect Select",      // Issue #2: Rectangle selection
+        "Circle Select",    // Issue #2: Circle selection
+        "Clone/Stamp (C)"   // Issue #2: Clone tool
+    };
     
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 9; ++i) {
         if (i > 0) ImGui::SameLine();
         
         bool selected = (static_cast<int>(currentTool) == i);
@@ -1051,7 +1305,21 @@ void PixelPaintView::DrawPaletteSelector()
 void PixelPaintView::DrawBrushSettings()
 {
     ImGui::Separator();
-    ImGui::SliderFloat("Brush Size", &brushSettings.size, 1.0f, 50.0f);
+    
+    // Issue #1: Brush Size with stepping option and toggle input
+    ImGui::Text("Brush Size Settings");
+    ImGui::Checkbox("##useStepping", &brushSettings.useStepping);
+    ImGui::SameLine();
+    ImGui::Text("Use Input Mode");
+    
+    if (brushSettings.useStepping) {
+        // Input field mode with 0.25 stepping
+        ImGui::DragFloat("Brush Size", &brushSettings.size, 0.25f, 1.0f, 50.0f, "%.2f");
+    } else {
+        // Slider mode
+        ImGui::SliderFloat("Brush Size", &brushSettings.size, 1.0f, 50.0f);
+    }
+    
     ImGui::SliderFloat("Opacity", &brushSettings.opacity, 0.0f, 1.0f);
     
     ImGui::Checkbox("Pressure Sensitivity", &pressureSensitivityEnabled);
@@ -1072,6 +1340,21 @@ void PixelPaintView::DrawBrushSettings()
                 eraserColor.a = static_cast<uint8_t>(col[3] * 255);
             }
         }
+    }
+    
+    // Issue #3: Dithering options with preserve alpha checkbox
+    if (currentTool == DrawTool::Pencil && paletteEnabled && ditheringEnabled) {
+        ImGui::Separator();
+        ImGui::Text("Dithering Settings");
+        ImGui::Checkbox("Preserve Alpha in Dithering", &ditheringPreserveAlpha);
+    }
+    
+    // Issue #4: Bucket fill threshold settings
+    if (currentTool == DrawTool::Fill || currentTool == DrawTool::BucketFill) {
+        ImGui::Separator();
+        ImGui::Text("Bucket Fill Settings");
+        ImGui::SliderFloat("Threshold", &bucketThreshold, 0.0f, 100.0f);
+        ImGui::Checkbox("Erase to Alpha##bucket", &bucketEraseToAlpha);
     }
 }
 
