@@ -1242,6 +1242,7 @@ void PixelPaintView::DrawStatusBar()
         }
     }
 
+    // Status text on the left
     ImGui::Text("Tool: %s | Brush: %.1f | Zoom: %.1fx | Color: #%02X%02X%02X%02X",
         toolName,
         brushSettings.size,
@@ -1251,6 +1252,14 @@ void PixelPaintView::DrawStatusBar()
         currentColor.b,
         currentColor.a
     );
+
+    // Collapse/Expand button on the right
+    ImGui::SameLine();
+    float availWidth = ImGui::GetContentRegionAvail().x;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availWidth - 30.0f);
+    if (ImGui::Button(rightPanelCollapsed ? "Show" : "Hide", ImVec2(40, 0))) {
+        rightPanelCollapsed = !rightPanelCollapsed;
+    }
 }
 
 // Main Draw function - NEW LAYOUT
@@ -1272,7 +1281,7 @@ void PixelPaintView::Draw(std::string_view label)
     const float rightPanelWidth = 260.0f;
 
     // LEFT TOOLBAR (thin, vertical) - tools only
-    ImGui::BeginChild("LeftToolbar", ImVec2(leftToolbarWidth, -statusBarHeight), true);
+    ImGui::BeginChild("LeftToolbar", ImVec2(leftToolbarWidth, -statusBarHeight), true, ImGuiWindowFlags_NoScrollbar);
     {
         DrawToolbar();
     }
@@ -1282,7 +1291,7 @@ void PixelPaintView::Draw(std::string_view label)
 
     // CENTER CANVAS AREA - main drawing space
     float canvasAreaWidth = screenSize.x - leftToolbarWidth - (rightPanelCollapsed ? 0.0f : rightPanelWidth) - 6.0f;
-    ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, -statusBarHeight), true);
+    ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, -statusBarHeight), true, ImGuiWindowFlags_NoScrollbar);
     {
         DrawCanvasView();
     }
@@ -1292,7 +1301,7 @@ void PixelPaintView::Draw(std::string_view label)
 
     // RIGHT PANEL - collapsible attributes panel
     if (!rightPanelCollapsed) {
-        ImGui::BeginChild("RightPanel", ImVec2(rightPanelWidth, -statusBarHeight), true);
+        ImGui::BeginChild("RightPanel", ImVec2(rightPanelWidth, -statusBarHeight), true, ImGuiWindowFlags_NoScrollbar);
         {
             // Edit section - Undo/Redo/Clear
             if (ImGui::CollapsingHeader("Edit", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -1392,13 +1401,7 @@ void PixelPaintView::Draw(std::string_view label)
         ImGui::EndChild();
     }
 
-    // TOP RIGHT: Collapse/Expand button for right panel
-    ImGui::SetCursorPos(ImVec2(screenSize.x - 25.0f, 5.0f));
-    if (ImGui::Button(rightPanelCollapsed ? ">" : "<", ImVec2(20, 20))) {
-        rightPanelCollapsed = !rightPanelCollapsed;
-    }
-
-#if !TARGET_OS_IOS && !TARGET_OS_TV
+    #if !TARGET_OS_IOS && !TARGET_OS_TV
     // File dialogs
     ImVec2 dialogSize = ImVec2(800, 600);
 
