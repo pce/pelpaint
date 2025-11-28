@@ -8,6 +8,9 @@
 #include <cstring>
 #include <queue>
 #include <map>
+#include <chrono>
+#include <sstream>
+#include <iomanip>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
@@ -39,6 +42,7 @@ PixelPaintView::PixelPaintView()
     , canvasSize(static_cast<float>(canvasWidth), static_cast<float>(canvasHeight))
 {
     availablePalettes = ColorPalettes::GetAllPalettes();
+    currentFilename = GetDefaultFilename("png");
     InitializeTexture();
     PushUndo("Initial state");
 }
@@ -598,8 +602,36 @@ bool PixelPaintView::LoadFromImage(const std::string& filename)
 
     stbi_image_free(imageData);
     textureNeedsUpdate = true;
+    SetFilenameFromLoadedImage(filename);
     PushUndo("Load image");
     return true;
+}
+
+std::string PixelPaintView::GetDefaultFilename(const std::string& extension)
+{
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    auto tm = std::localtime(&time);
+    
+    std::ostringstream oss;
+    oss << "artwork_"
+        << std::put_time(tm, "%Y%m%d_%H%M%S")
+        << "." << extension;
+    
+    return oss.str();
+}
+
+void PixelPaintView::SetFilenameFromLoadedImage(const std::string& imagePath)
+{
+    // Extract filename from path and remove extension
+    fs::path p(imagePath);
+    std::string stem = p.stem().string();
+    
+    if (!stem.empty()) {
+        currentFilename = stem;
+    } else {
+        currentFilename = GetDefaultFilename("png");
+    }
 }
 
 bool PixelPaintView::SaveBinary(const std::string& filename)
@@ -1371,13 +1403,16 @@ void PixelPaintView::Draw(std::string_view label)
 
             // File Operations section
             if (ImGui::CollapsingHeader("Files")) {
+                // Show current default filename
+                ImGui::Text("Filename: %s", currentFilename.c_str());
+                ImGui::Spacing();
+                
 #if TARGET_OS_IOS || TARGET_OS_TV
-                ImGui::InputText("Filename", filenameBuffer, sizeof(filenameBuffer));
                 if (ImGui::Button("Share TGA", ImVec2(-1, 0))) {
-                    SaveToTGA(std::string(filenameBuffer) + ".tga");
+                    SaveToTGA(currentFilename + ".tga");
                 }
                 if (ImGui::Button("Share Binary", ImVec2(-1, 0))) {
-                    SaveBinary(std::string(filenameBuffer) + ".pxl");
+                    SaveBinary(currentFilename + ".pxl");
                 }
                 if (ImGui::Button("Save to Files", ImVec2(-1, 0))) {
                     // iOS share implementation

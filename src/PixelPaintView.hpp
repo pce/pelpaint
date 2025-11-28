@@ -229,6 +229,10 @@ private:
 
 
     // File dialog state
-    char filenameBuffer[255] = "untitled";
+    std::string currentFilename;  // Track loaded/saved filename
     FileUtils fileUtils;
+    
+    // Helper methods for filename management
+    std::string GetDefaultFilename(const std::string& extension = "png");
+    void SetFilenameFromLoadedImage(const std::string& imagePath);
 };
