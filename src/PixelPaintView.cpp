@@ -1092,6 +1092,38 @@ void PixelPaintView::DrawPaletteSelector()
         ImGui::EndCombo();
     }
 
+    // Display palette colors for direct picking
+    if (!customPalette.empty()) {
+        ImGui::Separator();
+        ImGui::Text("Palette Colors:");
+        int colsPerRow = 8;
+        float colorButtonSize = 24.0f;
+        
+        for (size_t i = 0; i < customPalette.size(); ++i) {
+            const auto& color = customPalette[i];
+            ImVec4 buttonColor = ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f);
+            ImGui::PushID(static_cast<int>(i) + 10000);  // Offset ID to avoid conflicts
+            ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(buttonColor.x * 1.2f, buttonColor.y * 1.2f, buttonColor.z * 1.2f, buttonColor.w));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(buttonColor.x * 0.8f, buttonColor.y * 0.8f, buttonColor.z * 0.8f, buttonColor.w));
+            
+            if (ImGui::Button("##palettecolor", ImVec2(colorButtonSize, colorButtonSize))) {
+                currentColor = color;
+            }
+            
+            ImGui::PopStyleColor(3);
+            ImGui::PopID();
+            
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("R:%d G:%d B:%d A:%d", color.r, color.g, color.b, color.a);
+            }
+            
+            if ((i + 1) % colsPerRow != 0 && i + 1 < customPalette.size()) {
+                ImGui::SameLine();
+            }
+        }
+    }
+
     ImGui::Separator();
     ImGui::Checkbox("Enable Dithering", &ditheringEnabled);
     if (ditheringEnabled) {
