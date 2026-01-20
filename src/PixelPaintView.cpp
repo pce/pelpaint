@@ -43,8 +43,17 @@ PixelPaintView::PixelPaintView()
 {
     availablePalettes = ColorPalettes::GetAllPalettes();
     currentFilename = GetDefaultFilename("png");
+    this->grayscaleToMono = false; // Shared parameter for all dithering methods
+
     InitializeTexture();
     PushUndo("Initial state");
+    // End of constructor
+}
+
+void PixelPaintView::AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback) {
+    ImGui::SliderInt(label.c_str(), &min, min, max, "%d", step);
+    callback(min);
+
 }
 
 // Destructor
@@ -70,6 +79,50 @@ void PixelPaintView::InitializeTexture()
 #endif
 }
 
+
+void PixelPaintView::SetupDitheringUI()
+{
+    // Add a shared checkbox for grayscale-to-mono
+    AddCheckbox("Grayscale to Mono", [&](bool checked) {
+        grayscaleToMono = checked;
+    });
+
+    // Add sliders for matrix distance
+    AddSlider("Atkinson Matrix Distance", 1, 10, 1, [&](int value) {
+        atkinsonMatrixDistance = value;
+    });
+
+    AddSlider("Stucki Matrix Distance", 1, 10, 1, [&](int value) {
+        stuckiMatrixDistance = value;
+    });
+
+    // Add buttons for each dithering method
+    AddButton("Apply Atkinson Dithering", [this]() {
+        if (selectedPaletteIndex >= 0 && selectedPaletteIndex < availablePalettes.size()) {
+            ApplyDithering(DitheringType::Atkinson, availablePalettes[selectedPaletteIndex].colors);
+        }
+    });
+
+    AddButton("Apply Stucki Dithering", [this]() {
+        if (selectedPaletteIndex >= 0 && selectedPaletteIndex < availablePalettes.size()) {
+            ApplyDithering(DitheringType::Stucki, availablePalettes[selectedPaletteIndex].colors);
+        }
+    });
+
+    AddButton("Apply Floyd-Steinberg Dithering", [this]() {
+        if (selectedPaletteIndex >= 0 && selectedPaletteIndex < availablePalettes.size()) {
+            ApplyDithering(DitheringType::FloydSteinberg, availablePalettes[selectedPaletteIndex].colors);
+        }
+    });
+
+    AddButton("Apply Ordered Dithering", [this]() {
+        if (selectedPaletteIndex >= 0 && selectedPaletteIndex < availablePalettes.size()) {
+            ApplyDithering(DitheringType::Ordered, availablePalettes[selectedPaletteIndex].colors);
+        }
+    });
+
+}
+
 #if defined(USE_METAL_BACKEND)
 void PixelPaintView::SetMetalDevice(void* device)
 {
@@ -92,7 +145,7 @@ void PixelPaintView::UpdateTexture()
         }
 
         if (metalTexture != nullptr) {
-            id<MTLTexture> oldTexture = (__bridge_transfer id<MTLTexture>)metalTexture;
+            id<MTLTexture> oldTexture = (id<MTLTexture>)metalTexture;
         }
 
         MTLTextureDescriptor* textureDescriptor = [MTLTextureDescriptor
@@ -107,7 +160,7 @@ void PixelPaintView::UpdateTexture()
         MTLRegion region = MTLRegionMake2D(0, 0, canvasWidth, canvasHeight);
         [texture replaceRegion:region mipmapLevel:0 withBytes:canvasData.data() bytesPerRow:canvasWidth * 4];
 
-        metalTexture = (__bridge_retained void*)texture;
+        metalTexture = (void*)texture;
         textureNeedsUpdate = false;
     }
 #else
@@ -390,6 +443,28 @@ Pixel PixelPaintView::FindNearestPaletteColor(const Pixel& color, const std::vec
     return nearest;
 }
 
+void PixelPaintView::DiffuseError(int x, int y, int errorR, int errorG, int errorB, int spreadX, int spreadY, int divisor, int totalWeight)
+{
+    // Spread the error to neighboring pixels
+    for (int dy = -spreadY; dy <= spreadY; ++dy) {
+        for (int dx = -spreadX; dx <= spreadX; ++dx) {
+            if (dx == 0 && dy == 0) continue; // Skip the current pixel
+
+            int nx = x + dx;
+            int ny = y + dy;
+
+            if (IsValidCoord(nx, ny)) {
+                Pixel& neighbor = canvasData[GetPixelIndex(nx, ny)];
+                // Apply clamped error diffusion to avoid overflow/underflow
+                neighbor.r = static_cast<uint8_t>(std::clamp(static_cast<int>(neighbor.r) + (errorR * divisor) / totalWeight, 0, 255));
+                neighbor.g = static_cast<uint8_t>(std::clamp(static_cast<int>(neighbor.g) + (errorG * divisor) / totalWeight, 0, 255));
+                neighbor.b = static_cast<uint8_t>(std::clamp(static_cast<int>(neighbor.b) + (errorB * divisor) / totalWeight, 0, 255));
+            }
+        }
+    }
+}
+
+
 // Apply palette
 void PixelPaintView::ApplyPalette(const std::vector<Pixel>& palette)
 {
@@ -455,6 +530,83 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
     PushUndo("Apply dithering");
 }
 
+
+
+void PixelPaintView::AddCheckbox(const std::string& label, const std::function<void(bool)>& callback)
+{
+    // Stub implementation for AddCheckbox
+    bool checked = false;
+    callback(checked);
+}
+
+void PixelPaintView::AddButton(const std::string& label, const std::function<void()>& callback)
+{
+    if (ImGui::Button(label.c_str())) {
+        callback();
+    }
+}
+
+void PixelPaintView::ConvertToGrayscale()
+{
+    // Stub implementation for ConvertToGrayscale
+    for (auto& pixel : canvasData) {
+        int gray = static_cast<int>(0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b);
+        pixel.r = pixel.g = pixel.b = gray;
+    }
+}
+
+
+void PixelPaintView::ApplyAtkinsonDithering(const std::vector<Pixel>& palette)
+{
+
+    // Iterate over each pixel in the canvas
+    for (int y = 0; y < canvasHeight; ++y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            Pixel& currentPixel = canvasData[GetPixelIndex(x, y)];
+            Pixel closestColor = FindNearestPaletteColor(currentPixel, palette);
+
+            // Calculate the error
+            int errorR = currentPixel.r - closestColor.r;
+            int errorG = currentPixel.g - closestColor.g;
+            int errorB = currentPixel.b - closestColor.b;
+
+            // Apply the closest color
+            currentPixel = closestColor;
+
+            // Diffuse the error to neighboring pixels
+            DiffuseError(x, y, errorR, errorG, errorB, 1, 1, 1, 8); // Atkinson pattern
+        }
+    }
+    textureNeedsUpdate = true;
+}
+
+
+
+void PixelPaintView::ApplyStuckiDithering(const std::vector<Pixel>& palette)
+{
+    // Iterate over each pixel in the canvas
+    for (int y = 0; y < canvasHeight; ++y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            Pixel& currentPixel = canvasData[GetPixelIndex(x, y)];
+            Pixel closestColor = FindNearestPaletteColor(currentPixel, palette);
+
+            // Calculate the error
+            int errorR = currentPixel.r - closestColor.r;
+            int errorG = currentPixel.g - closestColor.g;
+            int errorB = currentPixel.b - closestColor.b;
+
+            // Apply the closest color
+            currentPixel = closestColor;
+
+            // Diffuse the error to neighboring pixels
+            DiffuseError(x, y, errorR, errorG, errorB, 2, 2, 2, 42); // Stucki pattern
+        }
+    }
+    textureNeedsUpdate = true;
+}
+
+
+
 // Ordered dithering
 void PixelPaintView::ApplyOrderedDithering(const std::vector<Pixel>& palette)
 {
@@ -489,7 +641,9 @@ void PixelPaintView::ApplyOrderedDithering(const std::vector<Pixel>& palette)
 
     textureNeedsUpdate = true;
     PushUndo("Apply ordered dithering");
+
 }
+
 
 // Undo/Redo
 void PixelPaintView::PushUndo(const std::string& description)
@@ -612,12 +766,12 @@ std::string PixelPaintView::GetDefaultFilename(const std::string& extension)
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
     auto tm = std::localtime(&time);
-    
+
     std::ostringstream oss;
     oss << "artwork_"
         << std::put_time(tm, "%Y%m%d_%H%M%S")
         << "." << extension;
-    
+
     return oss.str();
 }
 
@@ -626,7 +780,7 @@ void PixelPaintView::SetFilenameFromLoadedImage(const std::string& imagePath)
     // Extract filename from path and remove extension
     fs::path p(imagePath);
     std::string stem = p.stem().string();
-    
+
     if (!stem.empty()) {
         currentFilename = stem;
     } else {
@@ -1066,6 +1220,46 @@ void PixelPaintView::DrawColorPicker()
     }
 }
 
+void PixelPaintView::ApplyDithering(DitheringType type, const std::vector<Pixel>& palette)
+{
+    switch (type) {
+        case DitheringType::Atkinson:
+            if (atkinsonGrayscaleToMono) {
+                ConvertToGrayscale();
+            }
+            ApplyAtkinsonDithering(palette);
+            break;
+
+        case DitheringType::FloydSteinberg:
+            if (grayscaleToMono) {
+                ConvertToGrayscale();
+            }
+            ApplyFloydSteinbergDithering(palette);
+            break;
+
+        case DitheringType::Ordered:
+            if (grayscaleToMono) {
+                ConvertToGrayscale();
+            }
+            ApplyOrderedDithering(palette);
+            break;
+
+        case DitheringType::Stucki:
+            if (stuckiGrayscaleToMono) {
+                ConvertToGrayscale();
+            }
+            ApplyStuckiDithering(palette);
+            break;
+
+        default:
+            break;
+    }
+
+    textureNeedsUpdate = true;
+    PushUndo("Apply dithering");
+}
+
+
 // Draw palette selector
 void PixelPaintView::DrawPaletteSelector()
 {
@@ -1098,7 +1292,7 @@ void PixelPaintView::DrawPaletteSelector()
         ImGui::Text("Palette Colors:");
         int colsPerRow = 8;
         float colorButtonSize = 24.0f;
-        
+
         for (size_t i = 0; i < customPalette.size(); ++i) {
             const auto& color = customPalette[i];
             ImVec4 buttonColor = ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f);
@@ -1106,18 +1300,18 @@ void PixelPaintView::DrawPaletteSelector()
             ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(buttonColor.x * 1.2f, buttonColor.y * 1.2f, buttonColor.z * 1.2f, buttonColor.w));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(buttonColor.x * 0.8f, buttonColor.y * 0.8f, buttonColor.z * 0.8f, buttonColor.w));
-            
+
             if (ImGui::Button("##palettecolor", ImVec2(colorButtonSize, colorButtonSize))) {
                 currentColor = color;
             }
-            
+
             ImGui::PopStyleColor(3);
             ImGui::PopID();
-            
+
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("R:%d G:%d B:%d A:%d", color.r, color.g, color.b, color.a);
             }
-            
+
             if ((i + 1) % colsPerRow != 0 && i + 1 < customPalette.size()) {
                 ImGui::SameLine();
             }
@@ -1133,16 +1327,8 @@ void PixelPaintView::DrawPaletteSelector()
                 ApplyPalette(customPalette);
             }
         }
-        if (ImGui::Button("Apply Floyd-Steinberg", ImVec2(-1, 0))) {
-            if (!customPalette.empty()) {
-                ApplyFloydSteinbergDithering(customPalette);
-            }
-        }
-        if (ImGui::Button("Apply Ordered Dithering", ImVec2(-1, 0))) {
-            if (!customPalette.empty()) {
-                ApplyOrderedDithering(customPalette);
-            }
-        }
+        // Use the unified dithering UI setup
+        SetupDitheringUI();
     }
 }
 
@@ -1326,6 +1512,9 @@ void PixelPaintView::DrawStatusBar()
     }
 }
 
+
+
+
 // Main Draw function - NEW LAYOUT
 void PixelPaintView::Draw(std::string_view label)
 {
@@ -1438,7 +1627,7 @@ void PixelPaintView::Draw(std::string_view label)
                 // Show current default filename
                 ImGui::Text("Filename: %s", currentFilename.c_str());
                 ImGui::Spacing();
-                
+
 #if TARGET_OS_IOS || TARGET_OS_TV
                 if (ImGui::Button("Share TGA", ImVec2(-1, 0))) {
                     SaveToTGA(currentFilename + ".tga");

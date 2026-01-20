@@ -45,6 +45,13 @@ enum class DrawTool {
     Clone
 };
 
+enum class DitheringType {
+    Atkinson,
+    Stucki,
+    FloydSteinberg,
+    Ordered
+};
+
 // Brush settings
 struct BrushSettings {
     float size = 1.0f;
@@ -74,6 +81,19 @@ public:
     ~PixelPaintView();
 
     void Draw(std::string_view label);
+    void SetupDitheringUI(); // Declare SetupDitheringUI method
+    void DiffuseError(int x, int y, int errorR, int errorG, int errorB, int spreadX, int spreadY, int divisor, int totalWeight);
+    bool IsValidPixel(int x, int y) const;
+    void AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback);
+    void AddCheckbox(const std::string& label, const std::function<void(bool)>& callback); // Declare AddCheckbox
+    void AddButton(const std::string& label, const std::function<void()>& callback); // Declare AddButton
+    void ConvertToGrayscale(); // Declare ConvertToGrayscale
+    void ApplyAtkinsonDithering(const std::vector<Pixel>& palette); // Declare ApplyAtkinsonDithering
+    void ApplyDithering(DitheringType type, const std::vector<Pixel>& palette); // Declare ApplyDithering
+    void ApplyStuckiDithering(const std::vector<Pixel>& palette); // Declare ApplyStuckiDithering
+
+
+
 
 #if defined(USE_METAL_BACKEND)
     void SetMetalDevice(void* device);  // Call this from main to set the device
@@ -117,6 +137,11 @@ private:
     void DrawSpray(int x, int y, float radius, const Pixel& color, float density = 0.3f);
 
     // Palette & Dithering
+    bool grayscaleToMono = false; // Shared parameter for dithering
+    int atkinsonMatrixDistance = 1;
+    int stuckiMatrixDistance = 1;
+    bool atkinsonGrayscaleToMono = false;
+    bool stuckiGrayscaleToMono = false;
     void ApplyPalette(const std::vector<Pixel>& palette);
     void ApplyFloydSteinbergDithering(const std::vector<Pixel>& palette);
     void ApplyOrderedDithering(const std::vector<Pixel>& palette);
@@ -231,7 +256,7 @@ private:
     // File dialog state
     std::string currentFilename;  // Track loaded/saved filename
     FileUtils fileUtils;
-    
+
     // Helper methods for filename management
     std::string GetDefaultFilename(const std::string& extension = "png");
     void SetFilenameFromLoadedImage(const std::string& imagePath);

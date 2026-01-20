@@ -39,6 +39,9 @@ usage() {
 Usage: $0 <command> [options]
 
 Commands:
+    dev             Build and Run
+    build-run       Build and Run
+    run             Only cmake --build and Run
     macos           Build for macOS (native)
     ios             Build for iOS device
     ios-sim         Build for iOS Simulator
@@ -329,6 +332,19 @@ case $COMMAND in
         ;;
     clean-web)
         clean_web
+        ;;
+    build-run)
+        print_info "Building and running the project..."
+        mkdir -p "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        cmake ..
+        cmake --build .
+        ./PixelPaint
+        ;;
+    run)
+        print_info "Running the project..."
+        cd "$BUILD_DIR"
+        ./PixelPaint
         ;;
     help)
         usage
