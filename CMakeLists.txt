@@ -152,7 +152,6 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.mm
         ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
-        src/FileUtils.cpp
     )
 
     # Add iOS file manager for iOS/iPadOS builds
@@ -166,7 +165,6 @@ else()
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.cpp
         src/PixelPaintView.cpp
-        src/FileUtils.cpp
     )
 endif()
 

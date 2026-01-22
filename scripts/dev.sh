@@ -216,7 +216,7 @@ build_web() {
     if ! command -v emcc &> /dev/null; then
         print_error "Emscripten not found!"
         print_info "Please install Emscripten: https://emscripten.org/docs/getting_started/downloads.html"
-        print_info "Or run: git clone https://github.com/emscripten-core/emsdk.git && cd emsdk && ./emsdk install latest && ./emsdk activate latest && source ./emsdk_env.sh"
+        print_info "Or run: find \$HOME -name emsdk_env.sh 2> /dev/null || git clone https://github.com/emscripten-core/emsdk.git && cd emsdk && ./emsdk install latest && ./emsdk activate latest && source ./emsdk_env.sh"
         exit 1
     fi
 

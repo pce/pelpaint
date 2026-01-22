@@ -2,14 +2,16 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <vector>
 #include <memory>
+#include <functional>
+#include <unordered_map>
 #include <imgui.h>
 #include <implot.h>
 
-#include "FileUtils.hpp"
 #include "ColorPalettes.hpp"
 
 #if defined(USE_METAL_BACKEND)
@@ -84,8 +86,14 @@ public:
     void SetupDitheringUI(); // Declare SetupDitheringUI method
     void DiffuseError(int x, int y, int errorR, int errorG, int errorB, int spreadX, int spreadY, int divisor, int totalWeight);
     bool IsValidPixel(int x, int y) const;
+
+    // Persistent ImGui-backed controls:
+    // - `AddSlider` will create a labeled slider and keep its current value in `sliderValues` keyed by label.
+    // - `AddCheckbox` will create a labeled checkbox and keep its current state in `checkboxValues` keyed by label.
+    // Both functions keep their existing callback signatures for compatibility; callbacks are invoked when the value changes.
     void AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback);
     void AddCheckbox(const std::string& label, const std::function<void(bool)>& callback); // Declare AddCheckbox
+
     void AddButton(const std::string& label, const std::function<void()>& callback); // Declare AddButton
     void ConvertToGrayscale(); // Declare ConvertToGrayscale
     void ApplyAtkinsonDithering(const std::vector<Pixel>& palette); // Declare ApplyAtkinsonDithering
@@ -171,6 +179,13 @@ private:
     float canvasScale = 1.0f;
     ImVec2 scrollOffset = ImVec2(0, 0);
 
+    // Persistent ImGui control state: values are keyed by the control label
+    // `AddSlider` will store the current integer value in `sliderValues[label]`.
+    // `AddCheckbox` will store the current boolean state in `checkboxValues[label]`.
+    // These maps allow the widgets to retain state across frames without external state plumbing.
+    std::unordered_map<std::string, int> sliderValues;
+    std::unordered_map<std::string, bool> checkboxValues;
+
     // Drawing state
     DrawTool currentTool = DrawTool::Pencil;
     Pixel currentColor = Pixel(255, 255, 255, 255);
@@ -255,7 +270,6 @@ private:
 
     // File dialog state
     std::string currentFilename;  // Track loaded/saved filename
-    FileUtils fileUtils;
 
     // Helper methods for filename management
     std::string GetDefaultFilename(const std::string& extension = "png");

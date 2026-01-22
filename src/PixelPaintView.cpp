@@ -51,9 +51,25 @@ PixelPaintView::PixelPaintView()
 }
 
 void PixelPaintView::AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback) {
-    ImGui::SliderInt(label.c_str(), &min, min, max, "%d", step);
-    callback(min);
+    // Persistent slider backed by `sliderValues[label]`.
+    // Initialize to `min` when the slider is first created.
+    auto it = sliderValues.find(label);
+    if (it == sliderValues.end()) {
+        it = sliderValues.emplace(label, min).first;
+    }
 
+    int value = it->second;
+    // Use ImGui slider; `step` is not directly supported by SliderInt,
+    // but the slider will still constrain to [min,max]. If `step` is important
+    // we could implement +/- buttons; keep simple for now.
+    if (ImGui::SliderInt(label.c_str(), &value, min, max)) {
+        // Value changed by user
+        it->second = value;
+        if (callback) callback(value);
+    } else {
+        // Keep stored value in sync (covers external changes)
+        it->second = value;
+    }
 }
 
 // Destructor
@@ -534,9 +550,22 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
 
 void PixelPaintView::AddCheckbox(const std::string& label, const std::function<void(bool)>& callback)
 {
-    // Stub implementation for AddCheckbox
-    bool checked = false;
-    callback(checked);
+    // Persistent checkbox backed by `checkboxValues[label]`.
+    // Initialize to false when first created.
+    auto it = checkboxValues.find(label);
+    if (it == checkboxValues.end()) {
+        it = checkboxValues.emplace(label, false).first;
+    }
+
+    bool value = it->second;
+    if (ImGui::Checkbox(label.c_str(), &value)) {
+        // User toggled the checkbox
+        it->second = value;
+        if (callback) callback(value);
+    } else {
+        // Keep stored value in sync
+        it->second = value;
+    }
 }
 
 void PixelPaintView::AddButton(const std::string& label, const std::function<void()>& callback)
