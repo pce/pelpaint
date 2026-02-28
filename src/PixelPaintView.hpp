@@ -76,6 +76,14 @@ struct SelectionData {
     float blurAmount = 0.0f;
 };
 
+// Right panel tab enumeration
+enum class RightPanelTab {
+    Tool,           // Tool settings (brush, size, etc)
+    Color,          // Color and palette
+    Image,          // Image manipulation (dither, grayscale, etc)
+    Files           // File I/O
+};
+
 class PixelPaintView
 {
 public:
@@ -267,6 +275,8 @@ private:
     // UI Panel state
     bool rightPanelCollapsed = false;  // Toggle to hide/show right panel for more canvas space
 
+    // Right panel tab state
+    RightPanelTab currentRightPanelTab = RightPanelTab::Tool;
 
     // File dialog state
     std::string currentFilename;  // Track loaded/saved filename
@@ -274,4 +284,11 @@ private:
     // Helper methods for filename management
     std::string GetDefaultFilename(const std::string& extension = "png");
     void SetFilenameFromLoadedImage(const std::string& imagePath);
+
+    // Right panel drawing methods - organized by tabs
+    void DrawRightPanel();
+    void DrawToolTab();
+    void DrawColorTab();
+    void DrawImageTab();
+    void DrawFilesTab();
 };

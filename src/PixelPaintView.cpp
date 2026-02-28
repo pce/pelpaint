@@ -1541,6 +1541,209 @@ void PixelPaintView::DrawStatusBar()
     }
 }
 
+// RIGHT PANEL WITH TABS
+void PixelPaintView::DrawRightPanel()
+{
+    const float rightPanelWidth = 260.0f;
+    ImGui::BeginChild("RightPanel", ImVec2(rightPanelWidth, 0), true, ImGuiWindowFlags_NoScrollbar);
+    {
+        // Tab bar at the top
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
+
+        if (ImGui::BeginTabBar("RightPanelTabs", ImGuiTabBarFlags_None)) {
+            // Tool Tab
+            if (ImGui::BeginTabItem("Tool")) {
+                DrawToolTab();
+                ImGui::EndTabItem();
+            }
+
+            // Color Tab
+            if (ImGui::BeginTabItem("Color")) {
+                DrawColorTab();
+                ImGui::EndTabItem();
+            }
+
+            // Image Tab
+            if (ImGui::BeginTabItem("Image")) {
+                DrawImageTab();
+                ImGui::EndTabItem();
+            }
+
+            // Files Tab
+            if (ImGui::BeginTabItem("Files")) {
+                DrawFilesTab();
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
+}
+
+// TOOL TAB - Brush settings and editing tools
+void PixelPaintView::DrawToolTab()
+{
+    // Edit section - Undo/Redo/Clear
+    if (ImGui::CollapsingHeader("Edit", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("Undo (Ctrl+Z)", ImVec2(-1, 0))) { Undo(); }
+        if (ImGui::Button("Redo (Ctrl+Y)", ImVec2(-1, 0))) { Redo(); }
+        ImGui::Separator();
+        if (ImGui::Button("Clear Canvas", ImVec2(-1, 0))) { ClearCanvas(); }
+    }
+    ImGui::Spacing();
+
+    // Brush Settings section
+    if (ImGui::CollapsingHeader("Brush Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawBrushSettings();
+    }
+    ImGui::Spacing();
+
+    // View section - WITH ZOOM CONTROL
+    if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::SliderFloat("Zoom##zoom", &canvasScale, 0.1f, 20.0f, "%.1fx");
+        ImGui::Separator();
+        ImGui::Checkbox("Show Grid", &showGrid);
+        if (showGrid) {
+            ImGui::SliderInt("Grid Size", &gridSize, 2, 64);
+        }
+    }
+}
+
+// COLOR TAB - Color picker and palette
+void PixelPaintView::DrawColorTab()
+{
+    // Color & Palette section
+    if (ImGui::CollapsingHeader("Current Color", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawColorPicker();
+    }
+    ImGui::Spacing();
+
+    // Palette section
+    if (ImGui::CollapsingHeader("Color Palette", ImGuiTreeNodeFlags_DefaultOpen)) {
+        DrawPaletteSelector();
+    }
+    ImGui::Spacing();
+
+    // Recent Colors section
+    if (ImGui::CollapsingHeader("Recent Colors", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (currentTool == DrawTool::Pencil || currentTool == DrawTool::Eraser) {
+            if (!frequentColors.empty()) {
+                int colsPerRow = 4;
+                float colorButtonSize = 28.0f;
+                for (size_t i = 0; i < frequentColors.size(); ++i) {
+                    const auto& color = frequentColors[i];
+                    ImVec4 buttonColor = ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f);
+                    ImGui::PushID(static_cast<int>(i));
+                    ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(buttonColor.x * 1.2f, buttonColor.y * 1.2f, buttonColor.z * 1.2f, buttonColor.w));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(buttonColor.x * 0.8f, buttonColor.y * 0.8f, buttonColor.z * 0.8f, buttonColor.w));
+                    if (ImGui::Button("##color", ImVec2(colorButtonSize, colorButtonSize))) {
+                        currentColor = color;
+                    }
+                    ImGui::PopStyleColor(3);
+                    ImGui::PopID();
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("R:%d G:%d B:%d A:%d", color.r, color.g, color.b, color.a);
+                    }
+                    if ((i + 1) % colsPerRow != 0 && i + 1 < frequentColors.size()) {
+                        ImGui::SameLine();
+                    }
+                }
+            } else {
+                ImGui::TextDisabled("(no colors yet)");
+            }
+        }
+    }
+}
+
+// IMAGE TAB - Image manipulation (dithering, effects, etc)
+void PixelPaintView::DrawImageTab()
+{
+    if (ImGui::CollapsingHeader("Convert", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("Grayscale", ImVec2(-1, 0))) {
+            ConvertToGrayscale();
+        }
+    }
+    ImGui::Spacing();
+
+    if (ImGui::CollapsingHeader("Dithering", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::Checkbox("Enable Dithering##main", &ditheringEnabled);
+        if (ditheringEnabled) {
+            ImGui::Checkbox("Preserve Alpha##dither", &ditheringPreserveAlpha);
+            ImGui::Spacing();
+
+            // Dithering method selection
+            static int ditheringMethod = 0;
+            ImGui::RadioButton("Floyd-Steinberg", &ditheringMethod, 0);
+            ImGui::RadioButton("Atkinson", &ditheringMethod, 1);
+            ImGui::RadioButton("Stucki", &ditheringMethod, 2);
+            ImGui::RadioButton("Ordered", &ditheringMethod, 3);
+
+            ImGui::Spacing();
+            if (ImGui::Button("Apply Dithering##apply", ImVec2(-1, 0))) {
+                if (!paletteEnabled) {
+                    ImGui::OpenPopup("NoPaletteWarning");
+                } else {
+                    DitheringType method;
+                    switch (ditheringMethod) {
+                        case 0: method = DitheringType::FloydSteinberg; break;
+                        case 1: method = DitheringType::Atkinson; break;
+                        case 2: method = DitheringType::Stucki; break;
+                        case 3: method = DitheringType::Ordered; break;
+                        default: method = DitheringType::FloydSteinberg; break;
+                    }
+                    ApplyDithering(method, customPalette.empty() ? availablePalettes[selectedPaletteIndex].colors : customPalette);
+                }
+            }
+        }
+    }
+    ImGui::Spacing();
+
+    // Warning popup for dithering without palette
+    if (ImGui::BeginPopupModal("NoPaletteWarning", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Please select a palette before applying dithering.");
+        if (ImGui::Button("OK", ImVec2(120, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+// FILES TAB - File I/O operations
+void PixelPaintView::DrawFilesTab()
+{
+    ImGui::Text("Filename: %s", currentFilename.c_str());
+    ImGui::Spacing();
+
+#if TARGET_OS_IOS || TARGET_OS_TV
+    if (ImGui::Button("Share TGA", ImVec2(-1, 0))) {
+        SaveToTGA(currentFilename + ".tga");
+    }
+    if (ImGui::Button("Share Binary", ImVec2(-1, 0))) {
+        SaveBinary(currentFilename + ".pxl");
+    }
+    if (ImGui::Button("Save to Files", ImVec2(-1, 0))) {
+        // iOS share implementation
+    }
+    if (ImGui::Button("Open File", ImVec2(-1, 0))) {
+        // iOS file picker
+    }
+#else
+    if (ImGui::Button("Save TGA", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SaveTGADialog", "Save TGA", ".tga", ".", 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    }
+    if (ImGui::Button("Save PNG", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SavePNGDialog", "Save PNG", ".png", ".", 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    }
+    if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("LoadImageDialog", "Load Image", ".tga,.png,.jpg,.jpeg", ".", 1, nullptr, ImGuiFileDialogFlags_Modal);
+    }
+#endif
+}
+
 
 
 
@@ -1581,109 +1784,9 @@ void PixelPaintView::Draw(std::string_view label)
 
     ImGui::SameLine();
 
-    // RIGHT PANEL - collapsible attributes panel
+    // RIGHT PANEL - tabbed interface
     if (!rightPanelCollapsed) {
-        ImGui::BeginChild("RightPanel", ImVec2(rightPanelWidth, -statusBarHeight), true, ImGuiWindowFlags_NoScrollbar);
-        {
-            // Edit section - Undo/Redo/Clear
-            if (ImGui::CollapsingHeader("Edit", ImGuiTreeNodeFlags_DefaultOpen)) {
-                if (ImGui::Button("Undo (Ctrl+Z)", ImVec2(-1, 0))) { Undo(); }
-                if (ImGui::Button("Redo (Ctrl+Y)", ImVec2(-1, 0))) { Redo(); }
-                ImGui::Separator();
-                if (ImGui::Button("Clear Canvas", ImVec2(-1, 0))) { ClearCanvas(); }
-            }
-            ImGui::Spacing();
-
-            // Color & Palette section
-            if (ImGui::CollapsingHeader("Color & Palette", ImGuiTreeNodeFlags_DefaultOpen)) {
-                DrawColorPicker();
-                ImGui::Spacing();
-                DrawPaletteSelector();
-            }
-            ImGui::Spacing();
-
-            // Brush Settings section
-            if (ImGui::CollapsingHeader("Brush", ImGuiTreeNodeFlags_DefaultOpen)) {
-                DrawBrushSettings();
-            }
-            ImGui::Spacing();
-
-            // Recent Colors section
-            if (ImGui::CollapsingHeader("Recent Colors")) {
-                if (currentTool == DrawTool::Pencil || currentTool == DrawTool::Eraser) {
-                    if (!frequentColors.empty()) {
-                        int colsPerRow = 4;
-                        float colorButtonSize = 28.0f;
-                        for (size_t i = 0; i < frequentColors.size(); ++i) {
-                            const auto& color = frequentColors[i];
-                            ImVec4 buttonColor = ImVec4(color.r / 255.0f, color.g / 255.0f, color.b / 255.0f, color.a / 255.0f);
-                            ImGui::PushID(static_cast<int>(i));
-                            ImGui::PushStyleColor(ImGuiCol_Button, buttonColor);
-                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(buttonColor.x * 1.2f, buttonColor.y * 1.2f, buttonColor.z * 1.2f, buttonColor.w));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(buttonColor.x * 0.8f, buttonColor.y * 0.8f, buttonColor.z * 0.8f, buttonColor.w));
-                            if (ImGui::Button("##color", ImVec2(colorButtonSize, colorButtonSize))) {
-                                currentColor = color;
-                            }
-                            ImGui::PopStyleColor(3);
-                            ImGui::PopID();
-                            if (ImGui::IsItemHovered()) {
-                                ImGui::SetTooltip("R:%d G:%d B:%d A:%d", color.r, color.g, color.b, color.a);
-                            }
-                            if ((i + 1) % colsPerRow != 0 && i + 1 < frequentColors.size()) {
-                                ImGui::SameLine();
-                            }
-                        }
-                    } else {
-                        ImGui::TextDisabled("(no colors yet)");
-                    }
-                }
-            }
-            ImGui::Spacing();
-
-            // View section - WITH ZOOM CONTROL
-            if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::SliderFloat("Zoom##zoom", &canvasScale, 0.1f, 20.0f, "%.1fx");
-                ImGui::Separator();
-                ImGui::Checkbox("Show Grid", &showGrid);
-                if (showGrid) {
-                    ImGui::SliderInt("Grid Size", &gridSize, 2, 64);
-                }
-            }
-            ImGui::Spacing();
-
-            // File Operations section
-            if (ImGui::CollapsingHeader("Files")) {
-                // Show current default filename
-                ImGui::Text("Filename: %s", currentFilename.c_str());
-                ImGui::Spacing();
-
-#if TARGET_OS_IOS || TARGET_OS_TV
-                if (ImGui::Button("Share TGA", ImVec2(-1, 0))) {
-                    SaveToTGA(currentFilename + ".tga");
-                }
-                if (ImGui::Button("Share Binary", ImVec2(-1, 0))) {
-                    SaveBinary(currentFilename + ".pxl");
-                }
-                if (ImGui::Button("Save to Files", ImVec2(-1, 0))) {
-                    // iOS share implementation
-                }
-                if (ImGui::Button("Open File", ImVec2(-1, 0))) {
-                    // iOS file picker
-                }
-#else
-                if (ImGui::Button("Save TGA", ImVec2(-1, 0))) {
-                    ImGuiFileDialog::Instance()->OpenDialog("SaveTGADialog", "Save TGA", ".tga", ".", 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
-                }
-                if (ImGui::Button("Save PNG", ImVec2(-1, 0))) {
-                    ImGuiFileDialog::Instance()->OpenDialog("SavePNGDialog", "Save PNG", ".png", ".", 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
-                }
-                if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
-                    ImGuiFileDialog::Instance()->OpenDialog("LoadImageDialog", "Load Image", ".tga,.png,.jpg,.jpeg", ".", 1, nullptr, ImGuiFileDialogFlags_Modal);
-                }
-#endif
-            }
-        }
-        ImGui::EndChild();
+        DrawRightPanel();
     }
 
     #if !TARGET_OS_IOS && !TARGET_OS_TV
