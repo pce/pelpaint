@@ -39,6 +39,9 @@ usage() {
 Usage: $0 <command> [options]
 
 Commands:
+    dev             Build and Run
+    build-run       Build and Run
+    run             Only cmake --build and Run
     macos           Build for macOS (native)
     ios             Build for iOS device
     ios-sim         Build for iOS Simulator
@@ -213,7 +216,7 @@ build_web() {
     if ! command -v emcc &> /dev/null; then
         print_error "Emscripten not found!"
         print_info "Please install Emscripten: https://emscripten.org/docs/getting_started/downloads.html"
-        print_info "Or run: git clone https://github.com/emscripten-core/emsdk.git && cd emsdk && ./emsdk install latest && ./emsdk activate latest && source ./emsdk_env.sh"
+        print_info "Or run: find \$HOME -name emsdk_env.sh 2> /dev/null || git clone https://github.com/emscripten-core/emsdk.git && cd emsdk && ./emsdk install latest && ./emsdk activate latest && source ./emsdk_env.sh"
         exit 1
     fi
 
@@ -329,6 +332,19 @@ case $COMMAND in
         ;;
     clean-web)
         clean_web
+        ;;
+    build-run)
+        print_info "Building and running the project..."
+        mkdir -p "$BUILD_DIR"
+        cd "$BUILD_DIR"
+        cmake ..
+        cmake --build .
+        ./PixelPaint
+        ;;
+    run)
+        print_info "Running the project..."
+        cd "$BUILD_DIR"
+        ./PixelPaint
         ;;
     help)
         usage
