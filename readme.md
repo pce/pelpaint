@@ -7,7 +7,7 @@
     |___|    |   | /___/ \___\|_.: __/|   /  \|___|    |___|   ||   ||___|   |  |   |
              |___|               :/   |______/             |___||___|    |___|  |___|
 
-Fear changes, embrace the zen of undo or redo, no layers... just one brush for digital artistry and exploration. Love kills Fear? Undo is the key.
+Fear changes, embrace the zen of undo or redo, stacked layers... just one brush for digital artistry and exploration.
 
 Unleash your inner artist and embark on a journey of digital creativity with PixelPaint. This innovative painting application is more than just a canvas – it's a dynamic playground for artistic experimentation and expression.
 
@@ -18,6 +18,8 @@ Immersive Color Palette: Choose from a vibrant array of colors to add depth and 
 ## Example
 
 ![Line Art](examples/pelpaint_d3_floydstb.png)
+
+![Image Pixel](examples/img_pixeled.png)
 
 ## Build
 
