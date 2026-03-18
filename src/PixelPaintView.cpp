@@ -787,6 +787,8 @@ void PixelPaintView::ConvertToGrayscale()
     }
     RenderLayerToCanvas();
     textureNeedsUpdate = true;
+    PushUndo("To Grayscale");
+    textureNeedsUpdate = true;
     PushUndo("Convert to grayscale");
 }
 
@@ -1367,6 +1369,20 @@ bool PixelPaintView::LoadFromImage(const std::string& filename)
     SetFilenameFromLoadedImage(filename);
     PushUndo("Load image");
 
+    // Auto-pixelify large images to prevent memory/performance issues
+    if (autoPixelifyOnLoad && width > autoPixelifyThreshold) {
+        int calculatedPixelSize = CalculateAutoPixelSize(width, height);
+
+        // Ensure palette is selected
+        if (selectedPaletteIndex < 0 || selectedPaletteIndex >= availablePalettes.size()) {
+            selectedPaletteIndex = 0;
+        }
+        paletteEnabled = true;
+
+        // Apply pixelify automatically
+        ApplyPixelify(calculatedPixelSize, true);
+    }
+
     return true;
 }
 
@@ -1415,23 +1431,6 @@ void PixelPaintView::CropToSelection()
     currentSelection.isActive = false;
     RenderLayerToCanvas();
     textureNeedsUpdate = true;
-}
-
-    // Auto-pixelify large images to prevent memory/performance issues
-    if (autoPixelifyOnLoad && width > autoPixelifyThreshold) {
-        int calculatedPixelSize = CalculateAutoPixelSize(width, height);
-
-        // Ensure palette is selected
-        if (selectedPaletteIndex < 0 || selectedPaletteIndex >= availablePalettes.size()) {
-            selectedPaletteIndex = 0;
-        }
-        paletteEnabled = true;
-
-        // Apply pixelify automatically
-        ApplyPixelify(calculatedPixelSize, true);
-    }
-
-    return true;
 }
 
 std::string PixelPaintView::GetDefaultFilename(const std::string& extension)
