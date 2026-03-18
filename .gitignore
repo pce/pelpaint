@@ -1,4 +1,10 @@
+
+__pycache__
+.venv
+venv
+
 backlog
+
 
 docs
 

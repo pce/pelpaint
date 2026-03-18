@@ -1,5 +1,6 @@
 #include "PixelPaintView.hpp"
 #include "ImGuiFileDialog.h"
+#include "export/ImageExporter.hpp"
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -306,17 +307,21 @@ void PixelPaintView::ResizeCanvas(int newWidth, int newHeight)
         int copyWidth = std::min(canvasWidth, newWidth);
         int copyHeight = std::min(canvasHeight, newHeight);
 
-        for (int y = 0; y < copyHeight; ++y) {
-            for (int x = 0; x < copyWidth; ++x) {
-                newData[y * newWidth + x] = layer.pixelData[y * canvasWidth + x];
+        if (canvasWidth > 0 && canvasHeight > 0 && !layer.pixelData.empty()) {
+            for (int y = 0; y < copyHeight; ++y) {
+                for (int x = 0; x < copyWidth; ++x) {
+                    newData[y * newWidth + x] = layer.pixelData[y * canvasWidth + x];
+                }
             }
         }
 
-        layer.pixelData = newData;
+        layer.pixelData = std::move(newData);
     }
 
     canvasWidth = newWidth;
     canvasHeight = newHeight;
+    canvasData.assign(canvasWidth * canvasHeight, Pixel(0, 0, 0, 0));
+
     RenderLayerToCanvas();
     textureNeedsUpdate = true;
 }
@@ -1292,96 +1297,24 @@ bool PixelPaintView::SaveToPNG(const std::string& filename)
 
 bool PixelPaintView::SaveToSVGPixel(const std::string& filename)
 {
-    std::ofstream file(filename, std::ios::out | std::ios::trunc);
-    if (!file) return false;
-
-    file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-    file << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-         << "version=\"1.1\" "
-         << "viewBox=\"0 0 " << canvasWidth << " " << canvasHeight << "\" "
-         << "shape-rendering=\"crispEdges\">\n";
-
-    // Write one rect per non-transparent pixel
-    for (int y = 0; y < canvasHeight; ++y) {
-        for (int x = 0; x < canvasWidth; ++x) {
-            const Pixel& p = canvasData[y * canvasWidth + x];
-            if (p.a == 0) continue;
-
-            file << "<rect x=\"" << x << "\" y=\"" << y
-                 << "\" width=\"1\" height=\"1\" "
-                 << "fill=\"rgb(" << static_cast<int>(p.r) << ","
-                                 << static_cast<int>(p.g) << ","
-                                 << static_cast<int>(p.b) << ")\"";
-            if (p.a < 255) {
-                file << " fill-opacity=\"" << (static_cast<float>(p.a) / 255.0f) << "\"";
-            }
-            file << "/>\n";
-        }
-    }
-
-    file << "</svg>\n";
-    file.close();
-
-    if (!file.fail()) {
+    // Implementation uses optimized greedy rectangle merging
+    bool success = ImageExporter::SaveToSVGOptimized(filename, canvasWidth, canvasHeight, canvasData);
+    if (success) {
         fs::path p(filename);
         SaveLastDirectory(p.parent_path().string());
-        return true;
     }
-    return false;
+    return success;
 }
 
 bool PixelPaintView::SaveToSVGVector(const std::string& filename)
 {
-    std::ofstream file(filename, std::ios::out | std::ios::trunc);
-    if (!file) return false;
-
-    file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-    file << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
-         << "version=\"1.1\" "
-         << "viewBox=\"0 0 " << canvasWidth << " " << canvasHeight << "\">\n";
-
-    // Horizontal run-length compression into vector bars, then soften with rounded joins.
-    // This avoids writing every single pixel rectangle explicitly.
-    for (int y = 0; y < canvasHeight; ++y) {
-        int x = 0;
-        while (x < canvasWidth) {
-            const Pixel& p = canvasData[y * canvasWidth + x];
-            if (p.a == 0) { ++x; continue; }
-
-            int runStart = x;
-            int runEnd = x + 1;
-            while (runEnd < canvasWidth) {
-                const Pixel& q = canvasData[y * canvasWidth + runEnd];
-                if (q.a == 0) break;
-                if (q.r != p.r || q.g != p.g || q.b != p.b || q.a != p.a) break;
-                ++runEnd;
-            }
-
-            const int w = runEnd - runStart;
-
-            file << "<rect x=\"" << runStart << "\" y=\"" << y
-                 << "\" width=\"" << w << "\" height=\"1\" rx=\"0.35\" ry=\"0.35\" "
-                 << "fill=\"rgb(" << static_cast<int>(p.r) << ","
-                                 << static_cast<int>(p.g) << ","
-                                 << static_cast<int>(p.b) << ")\"";
-            if (p.a < 255) {
-                file << " fill-opacity=\"" << (static_cast<float>(p.a) / 255.0f) << "\"";
-            }
-            file << "/>\n";
-
-            x = runEnd;
-        }
-    }
-
-    file << "</svg>\n";
-    file.close();
-
-    if (!file.fail()) {
+    // Implementation uses optimized greedy merging with vector styling
+    bool success = ImageExporter::SaveToSVGVector(filename, canvasWidth, canvasHeight, canvasData);
+    if (success) {
         fs::path p(filename);
         SaveLastDirectory(p.parent_path().string());
-        return true;
     }
-    return false;
+    return success;
 }
 
 bool PixelPaintView::SaveToJPEG(const std::string& filename, int quality)
@@ -1433,6 +1366,56 @@ bool PixelPaintView::LoadFromImage(const std::string& filename)
     textureNeedsUpdate = true;
     SetFilenameFromLoadedImage(filename);
     PushUndo("Load image");
+
+    return true;
+}
+
+bool PixelPaintView::IsRectSelectionActive() const
+{
+    return currentSelection.isActive && currentSelection.type == SelectionData::Rectangle;
+}
+
+void PixelPaintView::CropToSelection()
+{
+    if (!IsRectSelectionActive()) return;
+
+    int x1 = static_cast<int>(std::floor(std::min(currentSelection.selectionStart.x, currentSelection.selectionEnd.x)));
+    int y1 = static_cast<int>(std::floor(std::min(currentSelection.selectionStart.y, currentSelection.selectionEnd.y)));
+    int x2 = static_cast<int>(std::floor(std::max(currentSelection.selectionStart.x, currentSelection.selectionEnd.x)));
+    int y2 = static_cast<int>(std::floor(std::max(currentSelection.selectionStart.y, currentSelection.selectionEnd.y)));
+
+    // Clamp to canvas
+    x1 = std::max(0, std::min(x1, canvasWidth - 1));
+    y1 = std::max(0, std::min(y1, canvasHeight - 1));
+    x2 = std::max(0, std::min(x2, canvasWidth - 1));
+    y2 = std::max(0, std::min(y2, canvasHeight - 1));
+
+    int newWidth = x2 - x1 + 1;
+    int newHeight = y2 - y1 + 1;
+
+    if (newWidth <= 0 || newHeight <= 0) return;
+
+    PushUndo("Crop to Selection");
+
+    // Extract cropped data for each layer
+    for (auto& layer : layers) {
+        std::vector<Pixel> croppedData(newWidth * newHeight);
+        for (int y = 0; y < newHeight; ++y) {
+            for (int x = 0; x < newWidth; ++x) {
+                croppedData[y * newWidth + x] = layer.pixelData[(y1 + y) * canvasWidth + (x1 + x)];
+            }
+        }
+        layer.pixelData = std::move(croppedData);
+    }
+
+    canvasWidth = newWidth;
+    canvasHeight = newHeight;
+    canvasData.assign(canvasWidth * canvasHeight, Pixel(0, 0, 0, 0));
+
+    currentSelection.isActive = false;
+    RenderLayerToCanvas();
+    textureNeedsUpdate = true;
+}
 
     // Auto-pixelify large images to prevent memory/performance issues
     if (autoPixelifyOnLoad && width > autoPixelifyThreshold) {
@@ -2503,6 +2486,14 @@ void PixelPaintView::DrawToolTab()
         if (ImGui::Button("Undo (Ctrl+Z)", ImVec2(-1, 0))) { Undo(); }
         if (ImGui::Button("Redo (Ctrl+Y)", ImVec2(-1, 0))) { Redo(); }
         ImGui::Separator();
+
+        if (IsRectSelectionActive()) {
+            if (ImGui::Button("Crop to Selection", ImVec2(-1, 0))) {
+                CropToSelection();
+            }
+            ImGui::Separator();
+        }
+
         if (ImGui::Button("Clear Canvas", ImVec2(-1, 0))) { ClearCanvas(); }
     }
     ImGui::Spacing();
@@ -3073,6 +3064,20 @@ void PixelPaintView::Draw(std::string_view label)
     ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, -statusBarHeight), true, ImGuiWindowFlags_NoScrollbar);
     {
         DrawCanvasView();
+
+        // Canvas context menu
+        if (ImGui::BeginPopupContextWindow("CanvasContextMenu")) {
+            if (IsRectSelectionActive()) {
+                if (ImGui::MenuItem("Crop to Selection")) {
+                    CropToSelection();
+                }
+                ImGui::Separator();
+            }
+
+            if (ImGui::MenuItem("Undo", "Ctrl+Z")) { Undo(); }
+            if (ImGui::MenuItem("Redo", "Ctrl+Y")) { Redo(); }
+            ImGui::EndPopup();
+        }
     }
     ImGui::EndChild();
 

@@ -291,6 +291,8 @@ private:
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
+    void CropToSelection();
+    bool IsRectSelectionActive() const;
 
     // UI State
     ImVec2 canvasPos;
