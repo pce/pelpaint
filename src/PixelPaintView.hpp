@@ -27,11 +27,14 @@ namespace fs = std::filesystem;
 
 // Undo/Redo snapshot
 struct CanvasSnapshot {
-    std::vector<Pixel> data;
+    std::vector<Layer> layers;
+    int activeLayerIndex;
+    int canvasWidth;
+    int canvasHeight;
     std::string description;
 
-    CanvasSnapshot(const std::vector<Pixel>& d, const std::string& desc = "")
-        : data(d), description(desc) {}
+    CanvasSnapshot(const std::vector<Layer>& l, int activeIdx, int w, int h, const std::string& desc = "")
+        : layers(l), activeLayerIndex(activeIdx), canvasWidth(w), canvasHeight(h), description(desc) {}
 };
 
 // Drawing tool types

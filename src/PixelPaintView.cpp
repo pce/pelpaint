@@ -61,7 +61,9 @@ PixelPaintView::PixelPaintView()
     InitializeTexture();
     InitializeLayers();
     LoadLastDirectory();
-    PushUndo("Initial state");
+
+    // Initial snapshot after layers are set up
+    undoStack.emplace_back(layers, activeLayerIndex, canvasWidth, canvasHeight, "Initial state");
 }
 
 void PixelPaintView::AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback) {
@@ -1205,7 +1207,7 @@ void PixelPaintView::PushUndo(const std::string& description)
     if (undoStack.size() >= maxUndoSteps) {
         undoStack.erase(undoStack.begin());
     }
-    undoStack.emplace_back(canvasData, description);
+    undoStack.emplace_back(layers, activeLayerIndex, canvasWidth, canvasHeight, description);
     redoStack.clear();
 }
 
@@ -1213,13 +1215,18 @@ void PixelPaintView::Undo()
 {
     if (undoStack.size() <= 1) return;
 
-    std::vector<Pixel> currentSnapshot;
-    CompositeLayers(currentSnapshot);
-    redoStack.push_back(CanvasSnapshot(currentSnapshot));
+    // Save current state to redo stack
+    redoStack.emplace_back(layers, activeLayerIndex, canvasWidth, canvasHeight, undoStack.back().description);
     undoStack.pop_back();
 
-    // Restore to canvas (for now, as a simple fallback)
-    canvasData = undoStack.back().data;
+    // Restore from undo stack
+    const auto& snapshot = undoStack.back();
+    layers = snapshot.layers;
+    activeLayerIndex = snapshot.activeLayerIndex;
+    canvasWidth = snapshot.canvasWidth;
+    canvasHeight = snapshot.canvasHeight;
+
+    RenderLayerToCanvas();
     textureNeedsUpdate = true;
 }
 
@@ -1227,11 +1234,18 @@ void PixelPaintView::Redo()
 {
     if (redoStack.empty()) return;
 
-    std::vector<Pixel> currentSnapshot;
-    CompositeLayers(currentSnapshot);
-    undoStack.push_back(CanvasSnapshot(currentSnapshot));
-    canvasData = redoStack.back().data;
+    // Save current state to undo stack
+    undoStack.emplace_back(layers, activeLayerIndex, canvasWidth, canvasHeight, redoStack.back().description);
+
+    // Restore from redo stack
+    const auto& snapshot = redoStack.back();
+    layers = snapshot.layers;
+    activeLayerIndex = snapshot.activeLayerIndex;
+    canvasWidth = snapshot.canvasWidth;
+    canvasHeight = snapshot.canvasHeight;
+
     redoStack.pop_back();
+    RenderLayerToCanvas();
     textureNeedsUpdate = true;
 }
 
@@ -1244,6 +1258,9 @@ void PixelPaintView::ClearUndoStack()
 // File I/O
 bool PixelPaintView::SaveToTGA(const std::string& filename)
 {
+    std::vector<Pixel> composite;
+    CompositeLayers(composite);
+
     FILE* file = fopen(filename.c_str(), "wb");
     if (!file) return false;
 
@@ -1258,7 +1275,7 @@ bool PixelPaintView::SaveToTGA(const std::string& filename)
 
     fwrite(header, 1, 18, file);
 
-    for (const auto& pixel : canvasData) {
+    for (const auto& pixel : composite) {
         fputc(pixel.b, file);
         fputc(pixel.g, file);
         fputc(pixel.r, file);
@@ -1276,10 +1293,13 @@ bool PixelPaintView::SaveToTGA(const std::string& filename)
 
 bool PixelPaintView::SaveToPNG(const std::string& filename)
 {
+    std::vector<Pixel> composite;
+    CompositeLayers(composite);
+
     std::vector<uint8_t> pngData;
     pngData.reserve(canvasWidth * canvasHeight * 4);
 
-    for (const auto& pixel : canvasData) {
+    for (const auto& pixel : composite) {
         pngData.push_back(pixel.r);
         pngData.push_back(pixel.g);
         pngData.push_back(pixel.b);
@@ -1299,8 +1319,11 @@ bool PixelPaintView::SaveToPNG(const std::string& filename)
 
 bool PixelPaintView::SaveToSVGPixel(const std::string& filename)
 {
+    std::vector<Pixel> composite;
+    CompositeLayers(composite);
+
     // Implementation uses optimized greedy rectangle merging
-    bool success = ImageExporter::SaveToSVGOptimized(filename, canvasWidth, canvasHeight, canvasData);
+    bool success = ImageExporter::SaveToSVGOptimized(filename, canvasWidth, canvasHeight, composite);
     if (success) {
         fs::path p(filename);
         SaveLastDirectory(p.parent_path().string());
@@ -1310,8 +1333,11 @@ bool PixelPaintView::SaveToSVGPixel(const std::string& filename)
 
 bool PixelPaintView::SaveToSVGVector(const std::string& filename)
 {
-    // Implementation uses optimized greedy merging with vector styling
-    bool success = ImageExporter::SaveToSVGVector(filename, canvasWidth, canvasHeight, canvasData);
+    std::vector<Pixel> composite;
+    CompositeLayers(composite);
+
+    // Implementation uses optimized greedy rectangle merging with vector styling
+    bool success = ImageExporter::SaveToSVGVector(filename, canvasWidth, canvasHeight, composite);
     if (success) {
         fs::path p(filename);
         SaveLastDirectory(p.parent_path().string());
@@ -1321,10 +1347,13 @@ bool PixelPaintView::SaveToSVGVector(const std::string& filename)
 
 bool PixelPaintView::SaveToJPEG(const std::string& filename, int quality)
 {
+    std::vector<Pixel> composite;
+    CompositeLayers(composite);
+
     std::vector<uint8_t> jpegData;
     jpegData.reserve(canvasWidth * canvasHeight * 3);
 
-    for (const auto& pixel : canvasData) {
+    for (const auto& pixel : composite) {
         jpegData.push_back(pixel.r);
         jpegData.push_back(pixel.g);
         jpegData.push_back(pixel.b);
