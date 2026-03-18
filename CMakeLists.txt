@@ -3,7 +3,12 @@ cmake_minimum_required(VERSION 3.22)
 project(
     "PixelPaint"
     VERSION 1.0.0
-    LANGUAGES C CXX OBJC OBJCXX)
+    LANGUAGES C CXX)
+
+# Enable Objective-C only on Apple platforms
+if(APPLE OR IOS)
+    enable_language(OBJC OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

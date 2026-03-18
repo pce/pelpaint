@@ -25,6 +25,38 @@
 
 namespace fs = std::filesystem;
 
+// Layer data structure - represents a single drawable layer
+struct Layer {
+    std::string name;                    // Layer name (e.g., "Background", "Foreground")
+    std::vector<Pixel> pixelData;        // Pixel buffer for this layer
+    float opacity = 1.0f;                // Layer opacity (0.0 - 1.0)
+    bool visible = true;                 // Layer visibility toggle
+    int zIndex = 0;                      // Z-order (higher = rendered on top)
+    bool locked = false;                 // Prevent accidental edits
+    ImVec4 blendColor = ImVec4(1,1,1,1); // Tint/blend color
+    int blendMode = 0;                   // 0=Normal, 1=Multiply, 2=Screen, 3=Overlay, etc.
+
+    Layer(const std::string& layerName, int width, int height, int z = 0)
+        : name(layerName), opacity(1.0f), visible(true), zIndex(z), locked(false)
+    {
+        pixelData.resize(width * height, Pixel(0, 0, 0, 0)); // Transparent by default
+    }
+
+    // Get blended pixel at (x, y)
+    Pixel GetPixel(int x, int y, int width, int height) const
+    {
+        if (x < 0 || x >= width || y < 0 || y >= height) return Pixel(0,0,0,0);
+        return pixelData[y * width + x];
+    }
+
+    // Set pixel at (x, y)
+    void SetPixel(int x, int y, int width, int height, const Pixel& color)
+    {
+        if (x < 0 || x >= width || y < 0 || y >= height) return;
+        pixelData[y * width + x] = color;
+    }
+};
+
 // Undo/Redo snapshot
 struct CanvasSnapshot {
     std::vector<Layer> layers;
@@ -127,37 +159,7 @@ struct SelectionData {
     } type = Rectangle;
 };
 
-// Layer data structure - represents a single drawable layer
-struct Layer {
-    std::string name;                    // Layer name (e.g., "Background", "Foreground")
-    std::vector<Pixel> pixelData;        // Pixel buffer for this layer
-    float opacity = 1.0f;                // Layer opacity (0.0 - 1.0)
-    bool visible = true;                 // Layer visibility toggle
-    int zIndex = 0;                      // Z-order (higher = rendered on top)
-    bool locked = false;                 // Prevent accidental edits
-    ImVec4 blendColor = ImVec4(1,1,1,1); // Tint/blend color
-    int blendMode = 0;                   // 0=Normal, 1=Multiply, 2=Screen, 3=Overlay, etc.
 
-    Layer(const std::string& layerName, int width, int height, int z = 0)
-        : name(layerName), opacity(1.0f), visible(true), zIndex(z), locked(false)
-    {
-        pixelData.resize(width * height, Pixel(0, 0, 0, 0)); // Transparent by default
-    }
-
-    // Get blended pixel at (x, y)
-    Pixel GetPixel(int x, int y, int width, int height) const
-    {
-        if (x < 0 || x >= width || y < 0 || y >= height) return Pixel(0,0,0,0);
-        return pixelData[y * width + x];
-    }
-
-    // Set pixel at (x, y)
-    void SetPixel(int x, int y, int width, int height, const Pixel& color)
-    {
-        if (x < 0 || x >= width || y < 0 || y >= height) return;
-        pixelData[y * width + x] = color;
-    }
-};
 
 // Right panel tab enumeration
 enum class RightPanelTab {

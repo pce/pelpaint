@@ -1,8 +1,10 @@
-#ifndef IMGUI_DEFINE_MATH_OPERATORS
-#define IMGUI_DEFINE_MATH_OPERATORS
+#ifndef IMGui_DEFINE_MATH_OPERATORS
+#define IMGui_DEFINE_MATH_OPERATORS
 #endif
 
 #include "ImGuiFileDialog.h"
+#include "imgui.h"
+#include "imgui_internal.h"
 
 #include <cfloat>
 #include <cstring>
@@ -17,384 +19,343 @@
 #include <algorithm>
 #include <iostream>
 
-#ifdef USE_STD_FILESYSTEM
-#include <filesystem>
-#include <exception>
-#endif
-
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#endif
-
-#ifdef _MSC_VER
-#define IGFD_DEBUG_BREAK if (IsDebuggerPresent()) __debugbreak()
-#else
-#define IGFD_DEBUG_BREAK
-#endif
-
-#if defined(__WIN32__) || defined(WIN32) || defined(_WIN32) || defined(__WIN64__) || defined(WIN64) || defined(_WIN64) || defined(_MSC_VER)
+#ifdef _WIN32
 #define _IGFD_WIN_
+#include <windows.h>
 #define stat _stat
 #define stricmp _stricmp
-#include <cctype>
-#ifdef USE_STD_FILESYSTEM
-#include <windows.h>
-#else
-#include "dirent/dirent.h"
-#endif
 #define PATH_SEP '\\'
 #ifndef PATH_MAX
 #define PATH_MAX 260
 #endif
-#elif defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__) || defined(__APPLE__) || defined(__EMSCRIPTEN__)
+#else
 #define _IGFD_UNIX_
-#define stricmp strcasecmp
 #include <sys/types.h>
-#ifndef USE_STD_FILESYSTEM
 #include <dirent.h>
-#endif
+#define stricmp strcasecmp
 #define PATH_SEP '/'
 #endif
-
-#include "imgui.h"
-#include "imgui_internal.h"
 
 #ifdef __cplusplus
 
 namespace IGFD {
 
-#ifndef IS_FLOAT_DIFFERENT
-#define IS_FLOAT_DIFFERENT(a, b) (fabs((a) - (b)) > FLT_EPSILON)
-#endif
-#ifndef IS_FLOAT_EQUAL
-#define IS_FLOAT_EQUAL(a, b) (fabs((a) - (b)) < FLT_EPSILON)
-#endif
+// --- Utils Implementation ---
 
-namespace Utils {
-
-IGFD_API bool ImSplitter(bool split_vertically, float thickness, float* size1, float* size2, float min_size1, float min_size2, float splitter_long_axis_size) {
+bool Utils::ImSplitter(bool split_vertically, float thickness, float* size1, float* size2, float min_size1, float min_size2, float splitter_long_axis_size) {
     using namespace ImGui;
     ImGuiContext& g = *GImGui;
     ImGuiWindow* window = g.CurrentWindow;
     ImGuiID id = window->GetID("##Splitter");
     ImRect bb;
-    bb.Min = window->DC.CursorPos + (split_vertically ? ImVec2(*size1, 0.0f) : ImVec2(0.0f, *size1));
-    bb.Max = bb.Min + CalcItemSize(split_vertically ? ImVec2(thickness, splitter_long_axis_size) : ImVec2(splitter_long_axis_size, thickness), 0.0f, 0.0f);
+
+    ImVec2 pos1 = window->DC.CursorPos;
+    ImVec2 offset = split_vertically ? ImVec2(*size1, 0.0f) : ImVec2(0.0f, *size1);
+    bb.Min = ImVec2(pos1.x + offset.x, pos1.y + offset.y);
+
+    ImVec2 size = split_vertically ? ImVec2(thickness, splitter_long_axis_size) : ImVec2(splitter_long_axis_size, thickness);
+    ImVec2 item_size = CalcItemSize(size, 0.0f, 0.0f);
+    bb.Max = ImVec2(bb.Min.x + item_size.x, bb.Min.y + item_size.y);
+
     return SplitterBehavior(bb, id, split_vertically ? ImGuiAxis_X : ImGuiAxis_Y, size1, size2, min_size1, min_size2, 1.0f);
 }
 
-IGFD_API std::string UTF8Encode(const std::wstring& wstr) {
-    std::string res;
-#ifdef _IGFD_WIN_
-    if (!wstr.empty()) {
-        int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
-        if (size_needed) {
-            res = std::string(size_needed, 0);
-            WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &res[0], size_needed, NULL, NULL);
+bool Utils::ReplaceString(std::string& str, const std::string& oldStr, const std::string& newStr, const size_t& vMaxRecursion) {
+    if (str.empty() || oldStr == newStr) return false;
+    bool res = false;
+    size_t pos = 0;
+    bool found = false;
+    size_t max_recursion = vMaxRecursion;
+    do {
+        pos = str.find(oldStr, pos);
+        if (pos != std::string::npos) {
+            found = res = true;
+            str.replace(pos, oldStr.length(), newStr);
+            pos += newStr.length();
+        } else if (found && max_recursion > 0) {
+            found = false;
+            pos = 0;
+            --max_recursion;
         }
-    }
-#else
-    (void)wstr;
-#endif
+    } while (pos != std::string::npos);
     return res;
 }
 
-IGFD_API std::wstring UTF8Decode(const std::string& str) {
-    std::wstring res;
-#ifdef _IGFD_WIN_
-    if (!str.empty()) {
-        int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
-        if (size_needed) {
-            res = std::wstring(size_needed, 0);
-            MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &res[0], size_needed);
-        }
-    }
+bool Utils::IsDirectoryCanBeOpened(const std::string& name) {
+    if (name.empty()) return false;
+#ifdef USE_STD_FILESYSTEM
+    try {
+        return std::filesystem::is_directory(name);
+    } catch (...) { return false; }
 #else
-    (void)str;
+    DIR* pDir = opendir(name.c_str());
+    if (pDir) { closedir(pDir); return true; }
+    return false;
 #endif
+}
+
+bool Utils::IsDirectoryExist(const std::string& name) {
+    if (name.empty()) return false;
+#ifdef USE_STD_FILESYSTEM
+    return std::filesystem::is_directory(name);
+#else
+    DIR* pDir = opendir(name.c_str());
+    if (pDir) { closedir(pDir); return true; }
+    return (errno != ENOENT);
+#endif
+}
+
+bool Utils::CreateDirectoryIfNotExist(const std::string& name) {
+    if (name.empty() || IsDirectoryExist(name)) return false;
+#ifdef USE_STD_FILESYSTEM
+    return std::filesystem::create_directory(name);
+#elif defined(_IGFD_WIN_)
+    return CreateDirectoryA(name.c_str(), NULL) != 0;
+#else
+    return mkdir(name.c_str(), 0755) == 0;
+#endif
+}
+
+Utils::PathStruct Utils::ParsePathFileName(const std::string& vPathFileName) {
+    PathStruct res;
+    if (vPathFileName.empty()) return res;
+    std::string pfn = vPathFileName;
+    std::replace(pfn.begin(), pfn.end(), '\\', '/');
+    size_t lastSlash = pfn.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+        res.path = pfn.substr(0, lastSlash);
+        res.name = pfn.substr(lastSlash + 1);
+    } else {
+        res.name = pfn;
+    }
+    size_t lastDot = res.name.find_last_of('.');
+    if (lastDot != std::string::npos) {
+        res.ext = res.name.substr(lastDot + 1);
+    }
+    res.isOk = true;
     return res;
 }
 
-IGFD_API bool ReplaceString(std::string& str, const ::std::string& oldStr, const ::std::string& newStr, const size_t& vMaxRecursion) {
-    if (!str.empty() && oldStr != newStr) {
+void Utils::AppendToBuffer(char* vBuffer, size_t vBufferLen, const std::string& vStr) {
+    size_t slen = strlen(vBuffer);
+    size_t remaining = vBufferLen - slen - 1;
+    if (remaining > 0) {
+        strncat(vBuffer, vStr.c_str(), remaining);
+    }
+}
+
+void Utils::ResetBuffer(char* vBuffer) { vBuffer[0] = '\0'; }
+
+void Utils::SetBuffer(char* vBuffer, size_t vBufferLen, const std::string& vStr) {
+    ResetBuffer(vBuffer);
+    strncpy(vBuffer, vStr.c_str(), vBufferLen - 1);
+    vBuffer[vBufferLen - 1] = '\0';
+}
+
+std::string Utils::UTF8Encode(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+#ifdef _IGFD_WIN_
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+    return strTo;
+#else
+    return std::string(wstr.begin(), wstr.end());
+#endif
+}
+
+std::wstring Utils::UTF8Decode(const std::string& str) {
+    if (str.empty()) return std::wstring();
+#ifdef _IGFD_WIN_
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    std::wstring wstrTo(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+    return wstrTo;
+#else
+    return std::wstring(str.begin(), str.end());
+#endif
+}
+
+// --- FileDialog Implementation ---
+
+FileDialog::FileDialog() : BookMarkFeature(), KeyExplorerFeature(), ThumbnailFeature() {
+    prFileDialogInternal.puDLGkey = "";
+    prFileDialogInternal.puDLGtitle = "";
+    prFileDialogInternal.puShowDialog = false;
+    prFileDialogInternal.puIsOk = false;
+}
+
+FileDialog::~FileDialog() {}
+
+void FileDialog::OpenDialog(const std::string& vKey, const std::string& vTitle, const char* vFilters, const std::string& vPath, const std::string& vFileName, const int& vCountSelectionMax, UserDatas vUserDatas, ImGuiFileDialogFlags vFlags) {
+    prFileDialogInternal.puDLGkey = vKey;
+    prFileDialogInternal.puDLGtitle = vTitle;
+    prFileDialogInternal.puFilterManager.puDLGFilters = vFilters ? vFilters : "";
+    prFileDialogInternal.puFileManager.SetCurrentPath(vPath);
+    prFileDialogInternal.puFileManager.SetDefaultFileName(vFileName);
+    prFileDialogInternal.puFileManager.puDLGcountSelectionMax = (size_t)vCountSelectionMax;
+    prFileDialogInternal.puDLGuserDatas = vUserDatas;
+    prFileDialogInternal.puDLGflags = vFlags;
+    prFileDialogInternal.puShowDialog = true;
+    prFileDialogInternal.puIsOk = false;
+}
+
+void FileDialog::OpenDialog(const std::string& vKey, const std::string& vTitle, const char* vFilters, const std::string& vFilePathName, const int& vCountSelectionMax, UserDatas vUserDatas, ImGuiFileDialogFlags vFlags) {
+    Utils::PathStruct ps = Utils::ParsePathFileName(vFilePathName);
+    OpenDialog(vKey, vTitle, vFilters, ps.path, ps.name, vCountSelectionMax, vUserDatas, vFlags);
+}
+
+void FileDialog::OpenDialog(const std::string& vKey, const std::string& vTitle, const char* vFilters, const std::string& vPath, const std::string& vFileName, const PaneFun& vSidePane, const float& vSidePaneWidth, const int& vCountSelectionMax, UserDatas vUserDatas, ImGuiFileDialogFlags vFlags) {
+    OpenDialog(vKey, vTitle, vFilters, vPath, vFileName, vCountSelectionMax, vUserDatas, vFlags);
+    prFileDialogInternal.puDLGoptionsPane = vSidePane;
+    prFileDialogInternal.puDLGoptionsPaneWidth = vSidePaneWidth;
+}
+
+void FileDialog::OpenDialog(const std::string& vKey, const std::string& vTitle, const char* vFilters, const std::string& vFilePathName, const PaneFun& vSidePane, const float& vSidePaneWidth, const int& vCountSelectionMax, UserDatas vUserDatas, ImGuiFileDialogFlags vFlags) {
+    Utils::PathStruct ps = Utils::ParsePathFileName(vFilePathName);
+    OpenDialog(vKey, vTitle, vFilters, ps.path, ps.name, vSidePane, vSidePaneWidth, vCountSelectionMax, vUserDatas, vFlags);
+}
+
+bool FileDialog::Display(const std::string& vKey, ImGuiWindowFlags vFlags, ImVec2 vMinSize, ImVec2 vMaxSize) {
+    if (prFileDialogInternal.puShowDialog && prFileDialogInternal.puDLGkey == vKey) {
+        ImGui::SetNextWindowSizeConstraints(vMinSize, vMaxSize);
         bool res = false;
-        size_t pos = 0;
-        bool found = false;
-        size_t max_recursion = vMaxRecursion;
-        do {
-            pos = str.find(oldStr, pos);
-            if (pos != std::string::npos) {
-                found = res = true;
-                str.replace(pos, oldStr.length(), newStr);
-                pos += newStr.length();
-            } else if (found && max_recursion > 0) {
-                found = false;
-                pos = 0;
-                --max_recursion;
+        if (ImGui::Begin(prFileDialogInternal.puDLGtitle.c_str(), &prFileDialogInternal.puShowDialog, vFlags)) {
+            prDrawHeader();
+            prDrawContent();
+            if (prDrawFooter()) {
+                res = true;
             }
-        } while (pos != std::string::npos);
+        }
+        ImGui::End();
         return res;
     }
     return false;
 }
 
-IGFD_API std::vector<std::string> SplitStringToVector(const std::string& vText, const char& vDelimiter, const bool& vPushEmpty) {
-    std::vector<std::string> arr;
-    if (!vText.empty()) {
-        size_t start = 0;
-        size_t end = vText.find(vDelimiter, start);
-        while (end != std::string::npos) {
-            auto token = vText.substr(start, end - start);
-            if (!token.empty() || (token.empty() && vPushEmpty)) {
-                arr.push_back(token);
-            }
-            start = end + 1;
-            end = vText.find(vDelimiter, start);
-        }
-        auto token = vText.substr(start);
-        if (!token.empty() || (token.empty() && vPushEmpty)) {
-            arr.push_back(token);
-        }
-    }
-    return arr;
+bool FileDialog::IsOk() const { return prFileDialogInternal.puIsOk; }
+void FileDialog::Close() { prFileDialogInternal.puShowDialog = false; }
+bool FileDialog::IsOpened() const { return prFileDialogInternal.puShowDialog; }
+bool FileDialog::IsOpened(const std::string& vKey) const { return prFileDialogInternal.puShowDialog && prFileDialogInternal.puDLGkey == vKey; }
+std::string FileDialog::GetOpenedKey() const { return prFileDialogInternal.puDLGkey; }
+
+std::string FileDialog::GetFilePathName(IGFD_ResultMode vFlag) { return prFileDialogInternal.puFileManager.GetResultingFilePathName(prFileDialogInternal, vFlag); }
+std::string FileDialog::GetCurrentPath() { return prFileDialogInternal.puFileManager.GetCurrentPath(); }
+std::string FileDialog::GetCurrentFileName(IGFD_ResultMode vFlag) { return prFileDialogInternal.puFileManager.puFileNameBuffer; }
+std::string FileDialog::GetCurrentFilter() { return prFileDialogInternal.puFilterManager.puDLGFilters; }
+UserDatas FileDialog::GetUserDatas() const { return prFileDialogInternal.puDLGuserDatas; }
+
+// --- FileManager Implementation ---
+
+FileManager::FileManager() {
+    prCurrentPath = ".";
+    Utils::SetBuffer(puInputPathBuffer, MAX_PATH_BUFFER_SIZE, prCurrentPath);
 }
 
-IGFD_API std::vector<std::string> GetDrivesList() {
-    std::vector<std::string> res;
-#ifdef _IGFD_WIN_
-    const DWORD mydrives = 2048;
-    char lpBuffer[2048];
-    const DWORD countChars = GetLogicalDriveStringsA(mydrives, lpBuffer);
-    if (countChars > 0U && countChars < 2049U) {
-        std::string var = std::string(lpBuffer, (size_t)countChars);
-        ReplaceString(var, "\\", "");
-        res = SplitStringToVector(var, '\0', false);
-    }
-#endif
-    return res;
+void FileManager::SetCurrentPath(const std::string& vPath) {
+    prCurrentPath = vPath;
+    if (prCurrentPath.empty()) prCurrentPath = ".";
+    Utils::SetBuffer(puInputPathBuffer, MAX_PATH_BUFFER_SIZE, prCurrentPath);
 }
 
-IGFD_API bool IsDirectoryCanBeOpened(const std::string& name) {
-    bool bExists = false;
-    if (!name.empty()) {
-#ifdef USE_STD_FILESYSTEM
-        namespace fs = std::filesystem;
-#ifdef _IGFD_WIN_
-        std::wstring wname = UTF8Decode(name.c_str());
-        fs::path pathName = fs::path(wname);
-#else
-        fs::path pathName = fs::path(name);
-#endif
-        try {
-            bExists = fs::is_directory(pathName);
-            const auto dir_iter = std::filesystem::directory_iterator(pathName);
-            (void)dir_iter;
-        } catch (...) {
-            bExists = false;
-        }
-#else
-        DIR* pDir = opendir(name.c_str());
-        if (pDir != nullptr) {
-            bExists = true;
-            (void)closedir(pDir);
-        }
-#endif
-    }
-    return bExists;
+void FileManager::SetDefaultFileName(const std::string& vFileName) {
+    Utils::SetBuffer(puFileNameBuffer, MAX_FILE_DIALOG_NAME_BUFFER, vFileName);
 }
 
-IGFD_API bool IsDirectoryExist(const std::string& name) {
-    bool bExists = false;
-    if (!name.empty()) {
-#ifdef USE_STD_FILESYSTEM
-        namespace fs = std::filesystem;
-#ifdef _IGFD_WIN_
-        std::wstring wname = UTF8Decode(name.c_str());
-        fs::path pathName = fs::path(wname);
-#else
-        fs::path pathName = fs::path(name);
-#endif
-        bExists = fs::is_directory(pathName);
-#else
-        DIR* pDir = opendir(name.c_str());
-        if (pDir) {
-            bExists = true;
-            closedir(pDir);
-        } else if (ENOENT != errno) {
-            bExists = true;
-        }
-#endif
-    }
-    return bExists;
+std::string FileManager::GetCurrentPath() { return prCurrentPath; }
+
+std::string FileManager::GetResultingFilePathName(FileDialogInternal& vFileDialogInternal, IGFD_ResultMode vFlag) {
+    std::string path = GetCurrentPath();
+    if (!path.empty() && path.back() != PATH_SEP) path += PATH_SEP;
+    return path + std::string(puFileNameBuffer);
 }
 
-IGFD_API bool CreateDirectoryIfNotExist(const std::string& name) {
-    bool res = false;
-    if (!name.empty()) {
-        if (!IsDirectoryExist(name)) {
-#ifdef _IGFD_WIN_
-#ifdef USE_STD_FILESYSTEM
-            namespace fs = std::filesystem;
-            std::wstring wname = UTF8Decode(name.c_str());
-            fs::path pathName = fs::path(wname);
-            res = fs::create_directory(pathName);
-#else
-            std::wstring wname = UTF8Decode(name);
-            if (CreateDirectoryW(wname.c_str(), nullptr)) res = true;
-#endif
-#elif defined(__EMSCRIPTEN__)
-            std::string str = std::string("FS.mkdir('") + name + "');";
-            emscripten_run_script(str.c_str());
-            res = true;
-#elif defined(_IGFD_UNIX_)
-#ifdef USE_STD_FILESYSTEM
-            namespace fs = std::filesystem;
-            res = fs::create_directory(fs::path(name));
-#endif
-#endif
-        }
-    }
-    return res;
-}
-
-IGFD_API PathStruct ParsePathFileName(const std::string& vPathFileName) {
-#ifdef USE_STD_FILESYSTEM
-    namespace fs = std::filesystem;
-    PathStruct res;
-    if (vPathFileName.empty()) return res;
-    auto fsPath = fs::path(vPathFileName);
-    if (fs::is_directory(fsPath)) {
-        res.name = "";
-        res.path = fsPath.string();
-        res.isOk = true;
-    } else {
-        res.name = fsPath.filename().string();
-        res.path = fsPath.parent_path().string();
-        res.isOk = true;
-    }
-    return res;
-#else
-    PathStruct res;
-    if (!vPathFileName.empty()) {
-        std::string pfn = vPathFileName;
-        std::string separator(1u, PATH_SEP);
-        ReplaceString(pfn, "\\", separator);
-        ReplaceString(pfn, "/", separator);
-        size_t lastSlash = pfn.find_last_of(separator);
-        if (lastSlash != std::string::npos) {
-            res.name = pfn.substr(lastSlash + 1);
-            res.path = pfn.substr(0, lastSlash);
-            res.isOk = true;
-        }
-        size_t lastPoint = pfn.find_last_of('.');
-        if (lastPoint != std::string::npos) {
-            if (!res.isOk) { res.name = pfn; res.isOk = true; }
-            res.ext = pfn.substr(lastPoint + 1);
-            ReplaceString(res.name, "." + res.ext, "");
-        }
-        if (!res.isOk) { res.name = std::move(pfn); res.isOk = true; }
-    }
-    return res;
-#endif
-}
-
-IGFD_API void AppendToBuffer(char* vBuffer, size_t vBufferLen, const std::string& vStr) {
-    std::string st = vStr;
-    size_t len = vBufferLen - 1u;
-    size_t slen = strlen(vBuffer);
-    if (!st.empty() && st != "\n") {
-        ReplaceString(st, "\n", "");
-        ReplaceString(st, "\r", "");
-    }
-    vBuffer[slen] = '\0';
-    std::string str = std::string(vBuffer) + vStr;
-    if (len > str.size()) len = str.size();
-#ifdef _MSC_VER
-    strncpy_s(vBuffer, vBufferLen, str.c_str(), len);
-#else
-    strncpy(vBuffer, str.c_str(), len);
-#endif
-    vBuffer[len] = '\0';
-}
-
-IGFD_API void ResetBuffer(char* vBuffer) { vBuffer[0] = '\0'; }
-
-IGFD_API void SetBuffer(char* vBuffer, size_t vBufferLen, const std::string& vStr) {
-    ResetBuffer(vBuffer);
-    AppendToBuffer(vBuffer, vBufferLen, vStr);
-}
-
-IGFD_API std::string LowerCaseString(const std::string& vString) {
-    auto str = vString;
-    for (char& c : str) c = (char)std::tolower(c);
-    return str;
-}
-
-} // namespace Utils
-
-IGFD_API FileStyle::FileStyle() : color(0, 0, 0, 0) {}
-IGFD_API FileStyle::FileStyle(const FileStyle& vStyle) : color(vStyle.color), icon(vStyle.icon), font(vStyle.font), flags(vStyle.flags) {}
-IGFD_API FileStyle::FileStyle(const ImVec4& vColor, const std::string& vIcon, ImFont* vFont) : color(vColor), icon(vIcon), font(vFont) {}
-
-IGFD_API void SearchManager::Clear() {
-    puSearchTag.clear();
-    Utils::ResetBuffer(puSearchBuffer);
-}
-
-IGFD_API void SearchManager::DrawSearchBar(FileDialogInternal& vFileDialogInternal) {
-    if (ImGui::Button("R##BtnImGuiFileDialogSearchField")) {
-        Clear();
-        vFileDialogInternal.puFileManager.ApplyFilteringOnFileList(vFileDialogInternal);
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset search");
-    ImGui::SameLine();
-    ImGui::Text("Search :");
-    ImGui::SameLine();
-    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-    bool edited = ImGui::InputText("##InputImGuiFileDialogSearchField", puSearchBuffer, MAX_FILE_DIALOG_NAME_BUFFER);
-    if (ImGui::GetItemID() == ImGui::GetActiveID()) puSearchInputIsActive = true;
-    ImGui::PopItemWidth();
-    if (edited) {
-        puSearchTag = puSearchBuffer;
-        vFileDialogInternal.puFileManager.ApplyFilteringOnFileList(vFileDialogInternal);
-    }
-}
-
-IGFD_API FileDialog::FileDialog() {}
-IGFD_API FileDialog::~FileDialog() {}
-
-IGFD_API void FileDialog::OpenDialog(const std::string& vKey, const std::string& vTitle, const char* vFilters, const std::string& vPath, const int& vCountSelectionMax, void* vUserDatas, int vFlags) {
-    m_FileDialogInternal.puKey = vKey;
-    m_FileDialogInternal.puTitle = vTitle;
-    m_FileDialogInternal.puFilters = vFilters;
-    m_FileDialogInternal.puFileManager.puCurrentPath = vPath;
-    m_FileDialogInternal.puCountSelectionMax = vCountSelectionMax;
-    m_FileDialogInternal.puUserDatas = vUserDatas;
-    m_FileDialogInternal.puFlags = vFlags;
-    m_FileDialogInternal.puIsOpened = true;
-}
-
-IGFD_API bool FileDialog::Display(const std::string& vKey, int vFlags, ImVec2 vMinSize, ImVec2 vMaxSize) {
-    if (m_FileDialogInternal.puIsOpened && m_FileDialogInternal.puKey == vKey) {
-        ImGui::SetNextWindowSizeConstraints(vMinSize, vMaxSize);
-        if (ImGui::Begin(m_FileDialogInternal.puTitle.c_str(), &m_FileDialogInternal.puIsOpened, vFlags)) {
-            // Very simplified display logic for brevity, normally calls internal draw methods
-            if (ImGui::Button("OK")) { m_FileDialogInternal.puIsOk = true; m_FileDialogInternal.puIsOpened = false; }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) { m_FileDialogInternal.puIsOk = false; m_FileDialogInternal.puIsOpened = false; }
-        }
-        ImGui::End();
+bool FileManager::SetPathOnParentDirectoryIfAny() {
+    size_t lastSlash = prCurrentPath.find_last_of(PATH_SEP);
+    if (lastSlash != std::string::npos && lastSlash > 0) {
+        SetCurrentPath(prCurrentPath.substr(0, lastSlash));
         return true;
     }
     return false;
 }
 
-IGFD_API bool FileDialog::IsOk() const { return m_FileDialogInternal.puIsOk; }
-IGFD_API void FileDialog::Close() { m_FileDialogInternal.puIsOpened = false; m_FileDialogInternal.puIsOk = false; }
-IGFD_API std::string FileDialog::GetFilePathName(int) { return m_FileDialogInternal.puFileManager.puCurrentPath; }
+void FileManager::ApplyFilteringOnFileList(const FileDialogInternal& vFileDialogInternal) {}
 
-IGFD_API void FileManager::ApplyFilteringOnFileList(FileDialogInternal&) {
-    // Simplified filtering logic
+void FileManager::ApplyFilteringOnFileList(const FileDialogInternal& vFileDialogInternal, std::vector<std::shared_ptr<FileInfos>>& vFileInfosList, std::vector<std::shared_ptr<FileInfos>>& vFileInfosFilteredList) {}
+
+// --- FilterManager Implementation ---
+
+// --- FileType Implementation ---
+FileType::FileType() : m_Content(ContentType::Invalid), m_Symlink(false) {}
+FileType::FileType(const ContentType& vContentType, const bool& vIsSymlink) : m_Content(vContentType), m_Symlink(vIsSymlink) {}
+void FileType::SetContent(const ContentType& vContentType) { m_Content = vContentType; }
+void FileType::SetSymLink(const bool& vIsSymlink) { m_Symlink = vIsSymlink; }
+bool FileType::isValid() const { return m_Content != ContentType::Invalid; }
+bool FileType::isDir() const { return m_Content == ContentType::Directory; }
+bool FileType::isFile() const { return m_Content == ContentType::File; }
+bool FileType::isLinkToUnknown() const { return m_Content == ContentType::LinkToUnknown; }
+bool FileType::isSymLink() const { return m_Symlink; }
+bool FileType::operator==(const FileType& rhs) const { return m_Content == rhs.m_Content; }
+bool FileType::operator!=(const FileType& rhs) const { return m_Content != rhs.m_Content; }
+bool FileType::operator<(const FileType& rhs) const { return m_Content < rhs.m_Content; }
+bool FileType::operator>(const FileType& rhs) const { return m_Content > rhs.m_Content; }
+
+// --- Feature Implementations ---
+KeyExplorerFeature::KeyExplorerFeature() {}
+BookMarkFeature::BookMarkFeature() {}
+ThumbnailFeature::ThumbnailFeature() {}
+ThumbnailFeature::~ThumbnailFeature() {}
+
+void FileDialog::prDrawHeader() {
+    if (ImGui::Button("..")) {
+        prFileDialogInternal.puFileManager.SetPathOnParentDirectoryIfAny();
+    }
+    ImGui::SameLine();
+    ImGui::Text("Path: %s", prFileDialogInternal.puFileManager.GetCurrentPath().c_str());
+}
+
+void FileDialog::prDrawContent() {
+    prDrawFileListView(ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2));
+}
+
+bool FileDialog::prDrawFooter() {
+    ImGui::InputText("File", prFileDialogInternal.puFileManager.puFileNameBuffer, MAX_FILE_DIALOG_NAME_BUFFER);
+    return prDrawValidationButtons();
+}
+
+void FileDialog::DisplayPathPopup(ImVec2 vSize) {}
+
+bool FileDialog::prDrawValidationButtons() {
+    bool res = false;
+    if (prDrawOkButton()) {
+        prFileDialogInternal.puIsOk = true;
+        prFileDialogInternal.puShowDialog = false;
+        res = true;
+    }
+    ImGui::SameLine();
+    if (prDrawCancelButton()) {
+        prFileDialogInternal.puIsOk = false;
+        prFileDialogInternal.puShowDialog = false;
+        res = true;
+    }
+    return res;
+}
+
+bool FileDialog::prDrawOkButton() {
+    return ImGui::Button("OK");
+}
+
+bool FileDialog::prDrawCancelButton() {
+    return ImGui::Button("Cancel");
+}
+
+void FileDialog::prDrawSidePane(float vHeight) {}
+
+void FileDialog::prSelectableItem(int vidx, std::shared_ptr<FileInfos> vInfos, bool vSelected, const char* vFmt, ...) {}
+
+void FileDialog::prDrawFileListView(ImVec2 vSize) {
+    ImGui::BeginChild("FileList", vSize, true);
+    ImGui::EndChild();
 }
 
 } // namespace IGFD
