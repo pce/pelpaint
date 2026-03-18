@@ -157,19 +157,22 @@ build_ios() {
 
     cd "$BUILD_PATH"
 
-    print_info "Running CMake configuration for iOS..."
+    print_info "Running CMake configuration for iOS (No Signing)..."
     cmake "${PROJECT_ROOT}" \
         -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
         -DCMAKE_SYSTEM_NAME=iOS \
         -DCMAKE_OSX_ARCHITECTURES="arm64" \
         -DCMAKE_OSX_DEPLOYMENT_TARGET="14.0" \
         -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO \
+        -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
+        -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
+        -DCMAKE_XCODE_ATTRIBUTE_AD_HOC_CODE_SIGNING_ALLOWED=YES \
         -DIOS=TRUE \
         -G "Xcode" \
         ${VERBOSE_FLAG}
 
     print_info "Building project..."
-    cmake --build . --config "${BUILD_TYPE}" ${VERBOSE_FLAG}
+    cmake --build . --config "${BUILD_TYPE}" -- -allowProvisioningUpdates ${VERBOSE_FLAG}
 
     print_success "iOS build completed successfully!"
     print_info "App location: ${BUILD_PATH}/${BUILD_TYPE}-iphoneos/PixelPaint.app"

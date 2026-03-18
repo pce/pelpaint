@@ -1,0 +1,106 @@
+name: Desktop Cross-Platform Build
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { name: "Windows Latest (MSVC)", os: windows-latest, build_type: "Release", cc: "cl", cxx: "cl", generators: "Visual Studio 17 2022" }
+          - { name: "macOS Latest (Clang)", os: macos-latest, build_type: "Release", cc: "clang", cxx: "clang++", generators: "Ninja" }
+          - { name: "iOS (Clang)", os: macos-latest, build_type: "Release", cc: "clang", cxx: "clang++", generators: "Xcode" }
+          - { name: "Ubuntu Latest (GCC)", os: ubuntu-latest, build_type: "Release", cc: "gcc", cxx: "g++", generators: "Ninja" }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            ninja-build \
+            libwayland-dev \
+            libxkbcommon-dev \
+            wayland-protocols \
+            libglu1-mesa-dev \
+            freeglut3-dev \
+            mesa-common-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libaudio-dev \
+            libjack-dev \
+            libsndio-dev \
+            libx11-dev \
+            libxext-dev \
+            libxcursor-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxss-dev \
+            libxtst-dev \
+            libdbus-1-dev \
+            libibus-1.0-dev \
+            libudev-dev \
+            libpipewire-0.3-dev
+
+      - name: Install macOS Dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja cmake
+
+      - name: Install Windows Dependencies
+        if: runner.os == 'Windows'
+        run: |
+          choco install ninja cmake
+
+      - name: Configure CMake
+        run: |
+          if [ "${{ matrix.config.name }}" = "iOS (Clang)" ]; then
+            cmake -B build \
+              -G "${{ matrix.config.generators }}" \
+              -DCMAKE_SYSTEM_NAME=iOS \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DCMAKE_BUILD_TYPE=${{ matrix.config.build_type }} \
+              -DENABLE_WARNINGS=ON \
+              -DENABLE_WARNINGS_AS_ERRORS=OFF
+          else
+            cmake -B build \
+              -G "${{ matrix.config.generators }}" \
+              -DCMAKE_BUILD_TYPE=${{ matrix.config.build_type }} \
+              -DCMAKE_C_COMPILER=${{ matrix.config.cc }} \
+              -DCMAKE_CXX_COMPILER=${{ matrix.config.cxx }} \
+              -DENABLE_WARNINGS=ON \
+              -DENABLE_WARNINGS_AS_ERRORS=OFF
+          fi
+
+      - name: Build
+        run: |
+          cmake --build build --config ${{ matrix.config.build_type }} --parallel
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.name }} Binary
+          path: |
+            build/Release-iphoneos/*.app
+            build/Release/*.app
+            build/Release/PixelPaint*
+            build/PixelPaint*
+            !build/**/*.obj
+            !build/**/*.o
+            !build/**/*.ninja
+            !build/**/*.cmake

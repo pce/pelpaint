@@ -94,14 +94,24 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
         ${IMGUI_DIR}/backends/imgui_impl_metal.mm
     )
-    set(IMGUI_BACKEND_LIBRARIES
-        "-framework Metal"
-        "-framework MetalKit"
-        "-framework Cocoa"
-        "-framework IOKit"
-        "-framework CoreVideo"
-        "-framework QuartzCore"
-    )
+    if(PLATFORM_IOS)
+        set(IMGUI_BACKEND_LIBRARIES
+            "-framework Metal"
+            "-framework MetalKit"
+            "-framework UIKit"
+            "-framework CoreGraphics"
+            "-framework QuartzCore"
+        )
+    else()
+        set(IMGUI_BACKEND_LIBRARIES
+            "-framework Metal"
+            "-framework MetalKit"
+            "-framework Cocoa"
+            "-framework IOKit"
+            "-framework CoreVideo"
+            "-framework QuartzCore"
+        )
+    endif()
 elseif(PLATFORM_WEB)
     list(APPEND IMGUI_SOURCES
         ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp
@@ -205,7 +215,7 @@ if(PLATFORM_IOS)
 
     # iOS resources
     set_target_properties(${PROJECT_NAME} PROPERTIES
-        RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist"
     )
 elseif(PLATFORM_MACOS)
     set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -213,6 +223,7 @@ elseif(PLATFORM_MACOS)
         MACOSX_BUNDLE_GUI_IDENTIFIER com.pixelpaint.app
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist"
     )
 elseif(PLATFORM_WEB)
     set_target_properties(${PROJECT_NAME} PROPERTIES
