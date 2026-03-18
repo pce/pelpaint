@@ -1290,6 +1290,100 @@ bool PixelPaintView::SaveToPNG(const std::string& filename)
     return success;
 }
 
+bool PixelPaintView::SaveToSVGPixel(const std::string& filename)
+{
+    std::ofstream file(filename, std::ios::out | std::ios::trunc);
+    if (!file) return false;
+
+    file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    file << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+         << "version=\"1.1\" "
+         << "viewBox=\"0 0 " << canvasWidth << " " << canvasHeight << "\" "
+         << "shape-rendering=\"crispEdges\">\n";
+
+    // Write one rect per non-transparent pixel
+    for (int y = 0; y < canvasHeight; ++y) {
+        for (int x = 0; x < canvasWidth; ++x) {
+            const Pixel& p = canvasData[y * canvasWidth + x];
+            if (p.a == 0) continue;
+
+            file << "<rect x=\"" << x << "\" y=\"" << y
+                 << "\" width=\"1\" height=\"1\" "
+                 << "fill=\"rgb(" << static_cast<int>(p.r) << ","
+                                 << static_cast<int>(p.g) << ","
+                                 << static_cast<int>(p.b) << ")\"";
+            if (p.a < 255) {
+                file << " fill-opacity=\"" << (static_cast<float>(p.a) / 255.0f) << "\"";
+            }
+            file << "/>\n";
+        }
+    }
+
+    file << "</svg>\n";
+    file.close();
+
+    if (!file.fail()) {
+        fs::path p(filename);
+        SaveLastDirectory(p.parent_path().string());
+        return true;
+    }
+    return false;
+}
+
+bool PixelPaintView::SaveToSVGVector(const std::string& filename)
+{
+    std::ofstream file(filename, std::ios::out | std::ios::trunc);
+    if (!file) return false;
+
+    file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    file << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+         << "version=\"1.1\" "
+         << "viewBox=\"0 0 " << canvasWidth << " " << canvasHeight << "\">\n";
+
+    // Horizontal run-length compression into vector bars, then soften with rounded joins.
+    // This avoids writing every single pixel rectangle explicitly.
+    for (int y = 0; y < canvasHeight; ++y) {
+        int x = 0;
+        while (x < canvasWidth) {
+            const Pixel& p = canvasData[y * canvasWidth + x];
+            if (p.a == 0) { ++x; continue; }
+
+            int runStart = x;
+            int runEnd = x + 1;
+            while (runEnd < canvasWidth) {
+                const Pixel& q = canvasData[y * canvasWidth + runEnd];
+                if (q.a == 0) break;
+                if (q.r != p.r || q.g != p.g || q.b != p.b || q.a != p.a) break;
+                ++runEnd;
+            }
+
+            const int w = runEnd - runStart;
+
+            file << "<rect x=\"" << runStart << "\" y=\"" << y
+                 << "\" width=\"" << w << "\" height=\"1\" rx=\"0.35\" ry=\"0.35\" "
+                 << "fill=\"rgb(" << static_cast<int>(p.r) << ","
+                                 << static_cast<int>(p.g) << ","
+                                 << static_cast<int>(p.b) << ")\"";
+            if (p.a < 255) {
+                file << " fill-opacity=\"" << (static_cast<float>(p.a) / 255.0f) << "\"";
+            }
+            file << "/>\n";
+
+            x = runEnd;
+        }
+    }
+
+    file << "</svg>\n";
+    file.close();
+
+    if (!file.fail()) {
+        fs::path p(filename);
+        SaveLastDirectory(p.parent_path().string());
+        return true;
+    }
+    return false;
+}
+
 bool PixelPaintView::SaveToJPEG(const std::string& filename, int quality)
 {
     std::vector<uint8_t> jpegData;
@@ -2768,6 +2862,12 @@ void PixelPaintView::DrawFilesTab()
     if (ImGui::Button("Save PNG", ImVec2(-1, 0))) {
         ImGuiFileDialog::Instance()->OpenDialog("SavePNGDialog", "Save PNG", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
     }
+    if (ImGui::Button("Save SVG Pixel", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SaveSVGPixelDialog", "Save SVG Pixel", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    }
+    if (ImGui::Button("Save SVG Vector", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SaveSVGVectorDialog", "Save SVG Vector", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    }
     if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
         ImGuiFileDialog::Instance()->OpenDialog("LoadImageDialog", "Load Image", ".tga,.png,.jpg,.jpeg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal);
     }
@@ -3021,6 +3121,20 @@ void PixelPaintView::Draw(std::string_view label)
     if (ImGuiFileDialog::Instance()->Display("SavePNGDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             SaveToPNG(ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("SaveSVGPixelDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            SaveToSVGPixel(ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("SaveSVGVectorDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            SaveToSVGVector(ImGuiFileDialog::Instance()->GetFilePathName());
         }
         ImGuiFileDialog::Instance()->Close();
     }

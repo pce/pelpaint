@@ -286,6 +286,8 @@ private:
     bool SaveToTGA(const std::string& filename);
     bool SaveToPNG(const std::string& filename);
     bool SaveToJPEG(const std::string& filename, int quality = 90);
+    bool SaveToSVGPixel(const std::string& filename);
+    bool SaveToSVGVector(const std::string& filename);
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
