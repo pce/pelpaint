@@ -12,18 +12,22 @@
     #include "imgui_impl_metal.h"
     #import <Metal/Metal.h>
     #import <QuartzCore/CAMetalLayer.h>
-#else
+#elif defined(USE_WEBGL_BACKEND)
     #include "imgui_impl_sdl3.h"
     #include "imgui_impl_opengl3.h"
-    #if defined(__EMSCRIPTEN__)
-        #include <emscripten.h>
-        #include <emscripten/html5.h>
-    #endif
-    #if defined(IMGUI_IMPL_OPENGL_ES2)
-        #include <SDL3/SDL_opengles2.h>
-    #else
-        #include <SDL3/SDL_opengl.h>
-    #endif
+    #include <emscripten.h>
+    #include <emscripten/html5.h>
+    #include <SDL3/SDL_opengles2.h>
+#elif defined(USE_VULKAN_BACKEND)
+    #include "imgui_impl_sdl3.h"
+    #include "imgui_impl_vulkan.h"
+    #include <SDL3/SDL_vulkan.h>
+#elif defined(USE_OPENGL_BACKEND)
+    #include "imgui_impl_sdl3.h"
+    #include "imgui_impl_opengl3.h"
+    #include <SDL3/SDL_opengl.h>
+#else
+    #error "No rendering backend selected"
 #endif
 
 #define SDL_MAIN_USE_CALLBACKS
@@ -32,18 +36,24 @@
 
 #include "PixelPaintView.hpp"
 
+using pelpaint::PixelPaintView;
+
 constexpr auto WINDOW_WIDTH = std::uint32_t{1280};
 constexpr auto WINDOW_HEIGHT = std::uint32_t{720};
 
 namespace fs = std::filesystem;
 
-// Application state structure
 struct AppState
 {
     SDL_Window* window = nullptr;
     bool quit = false;
     std::unique_ptr<PixelPaintView> pixelPaintView;
-    
+
+    // pen tilt state updated by SDL_EVENT_PEN_AXIS and forwarded to
+    // PixelPaintView::SetPenTilt() so BrushMode::Pen can orient the nib.
+    float penTiltX = 0.0f;
+    float penTiltY = 0.0f;
+
 #if defined(USE_METAL_BACKEND)
     SDL_MetalView metalView = nullptr;
     id<MTLDevice> metalDevice = nil;
@@ -54,10 +64,9 @@ struct AppState
 #endif
 };
 
-// Global app state (required for SDL3 callback architecture)
+// Global app state for SDL3 callback architecture
 static AppState* g_AppState = nullptr;
 
-// Initialize the application
 SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 {
     // Create application state
@@ -79,7 +88,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         WINDOW_HEIGHT,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY
     );
-    
+
     if (!g_AppState->window)
     {
         SDL_Log("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
@@ -140,7 +149,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         SDL_Log("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
         return SDL_APP_FAILURE;
     }
-    
+
     SDL_GL_MakeCurrent(g_AppState->window, g_AppState->glContext);
     SDL_GL_SetSwapInterval(1); // Enable vsync
 #endif
@@ -149,13 +158,12 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
-    
+
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    
-    // Setup Dear ImGui style - Unreal Engine theme
-    ImGuiTheme::SetupUnrealTheme();
+
+    pelpaint::ui::SetupUnrealTheme();
 
     // Setup Platform/Renderer backends
 #if defined(USE_METAL_BACKEND)
@@ -183,20 +191,53 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
     AppState* state = static_cast<AppState*>(appstate);
-    
+
     ImGui_ImplSDL3_ProcessEvent(event);
-    
+
     if (event->type == SDL_EVENT_QUIT)
     {
         state->quit = true;
         return SDL_APP_SUCCESS;
     }
-    
+
     if (event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
         event->window.windowID == SDL_GetWindowID(state->window))
     {
         state->quit = true;
         return SDL_APP_SUCCESS;
+    }
+
+    // -----------------------------------------------------------------------
+    // SDL pen / stylus events — forward to PixelPaintView so brush modes that
+    // depend on pressure (BrushMode::Pen, BrushMode::PixelBrush) receive live
+    // hardware data even before the ImGui frame has started.
+    //
+    // SDL_PEN_AXIS_PRESSURE   → SetCurrentPressure()  (0..1 normalised)
+    // SDL_PEN_AXIS_XTILT      → X component of SetPenTilt() (-1..1 normalised)
+    // SDL_PEN_AXIS_YTILT      → Y component of SetPenTilt() (-1..1 normalised)
+    //
+    // Tilt axes arrive as separate events so we cache both in AppState and
+    // call SetPenTilt with the combined values each time either changes.
+    // -----------------------------------------------------------------------
+    if (event->type == SDL_EVENT_PEN_AXIS && state->pixelPaintView)
+    {
+        auto* view = state->pixelPaintView.get();
+        switch (event->paxis.axis)
+        {
+            case SDL_PEN_AXIS_PRESSURE:
+                view->SetCurrentPressure(event->paxis.value);
+                break;
+            case SDL_PEN_AXIS_XTILT:
+                state->penTiltX = event->paxis.value;
+                view->SetPenTilt(state->penTiltX, state->penTiltY);
+                break;
+            case SDL_PEN_AXIS_YTILT:
+                state->penTiltY = event->paxis.value;
+                view->SetPenTilt(state->penTiltX, state->penTiltY);
+                break;
+            default:
+                break;
+        }
     }
 
     return SDL_APP_CONTINUE;
@@ -206,7 +247,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 SDL_AppResult SDL_AppIterate(void* appstate)
 {
     AppState* state = static_cast<AppState*>(appstate);
-    
+
     if (state->quit)
     {
         return SDL_APP_SUCCESS;
@@ -264,17 +305,17 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 
     // Rendering
     ImGui::Render();
-    
+
     ImGuiIO& io = ImGui::GetIO();
     glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-    
+
     const ImVec4 clear_color = ImVec4(30.0f/255.0f, 30.0f/255.0f, 30.0f/255.0f, 1.00f);
-    glClearColor(clear_color.x * clear_color.w, 
-                 clear_color.y * clear_color.w, 
-                 clear_color.z * clear_color.w, 
+    glClearColor(clear_color.x * clear_color.w,
+                 clear_color.y * clear_color.w,
+                 clear_color.z * clear_color.w,
                  clear_color.w);
     glClear(GL_COLOR_BUFFER_BIT);
-    
+
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     SDL_GL_SwapWindow(state->window);
 #endif
@@ -286,7 +327,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
 void SDL_AppQuit(void* appstate, SDL_AppResult result)
 {
     AppState* state = static_cast<AppState*>(appstate);
-    
+
     if (!state)
         return;
 
@@ -297,7 +338,7 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result)
     ImGui_ImplOpenGL3_Shutdown();
 #endif
     ImGui_ImplSDL3_Shutdown();
-    
+
     ImPlot::DestroyContext();
     ImGui::DestroyContext();
 

@@ -36,6 +36,10 @@
 #define PATH_SEP '/'
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #ifdef __cplusplus
 
 namespace IGFD {
@@ -176,6 +180,54 @@ std::wstring Utils::UTF8Decode(const std::string& str) {
 #endif
 }
 
+std::vector<std::string> Utils::SplitStringToVector(const std::string& vText, const char& vDelimiter, const bool& vPushEmpty) {
+    std::vector<std::string> res;
+    std::string item;
+    std::stringstream ss(vText);
+    while (std::getline(ss, item, vDelimiter)) {
+        if (!item.empty() || vPushEmpty) {
+            res.push_back(item);
+        }
+    }
+    return res;
+}
+
+std::vector<std::string> Utils::GetDrivesList() {
+    std::vector<std::string> res;
+#ifdef _IGFD_WIN_
+    char drives[512];
+    if (GetLogicalDriveStringsA(512, drives)) {
+        char* p = drives;
+        while (*p) {
+            res.push_back(p);
+            p += strlen(p) + 1;
+        }
+    }
+#endif
+    return res;
+}
+
+std::string Utils::LowerCaseString(const std::string& vString) {
+    std::string res = vString;
+    std::transform(res.begin(), res.end(), res.begin(), [](unsigned char c){ return std::tolower(c); });
+    return res;
+}
+
+size_t Utils::GetCharCountInString(const std::string& vString, const char& vChar) {
+    return std::count(vString.begin(), vString.end(), vChar);
+}
+
+size_t Utils::GetLastCharPosWithMinCharCount(const std::string& vString, const char& vChar, const size_t& vMinCharCount) {
+    if (vMinCharCount == 0) return std::string::npos;
+    size_t count = 0;
+    for (size_t i = vString.size(); i > 0; --i) {
+        if (vString[i-1] == vChar) {
+            if (++count == vMinCharCount) return i - 1;
+        }
+    }
+    return std::string::npos;
+}
+
 // --- FileDialog Implementation ---
 
 FileDialog::FileDialog() : BookMarkFeature(), KeyExplorerFeature(), ThumbnailFeature() {
@@ -297,8 +349,8 @@ bool FileType::isLinkToUnknown() const { return m_Content == ContentType::LinkTo
 bool FileType::isSymLink() const { return m_Symlink; }
 bool FileType::operator==(const FileType& rhs) const { return m_Content == rhs.m_Content; }
 bool FileType::operator!=(const FileType& rhs) const { return m_Content != rhs.m_Content; }
-bool FileType::operator<(const FileType& rhs) const { return m_Content < rhs.m_Content; }
-bool FileType::operator>(const FileType& rhs) const { return m_Content > rhs.m_Content; }
+bool FileType::operator<(const FileType& rhs) const { return (int)m_Content < (int)rhs.m_Content; }
+bool FileType::operator>(const FileType& rhs) const { return (int)m_Content > (int)rhs.m_Content; }
 
 // --- Feature Implementations ---
 KeyExplorerFeature::KeyExplorerFeature() {}

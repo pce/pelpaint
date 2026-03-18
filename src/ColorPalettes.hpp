@@ -4,19 +4,21 @@
 #include <cstdint>
 #include <string>
 
+namespace pelpaint {
+
 // Represent a single pixel (RGBA)
 struct Pixel {
     uint8_t r, g, b, a;
-    
+
     Pixel() : r(0), g(0), b(0), a(255) {}
     Pixel(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255)
         : r(red), g(green), b(blue), a(alpha) {}
-    
+
     // Equality operator
     bool operator==(const Pixel& other) const {
         return r == other.r && g == other.g && b == other.b && a == other.a;
     }
-    
+
     // Calculate color distance (squared Euclidean distance in RGB space)
     int DistanceSquared(const Pixel& other) const {
         int dr = static_cast<int>(r) - static_cast<int>(other.r);
@@ -24,14 +26,14 @@ struct Pixel {
         int db = static_cast<int>(b) - static_cast<int>(other.b);
         return dr * dr + dg * dg + db * db;
     }
-    
+
     // Find nearest color in a palette
     static Pixel FindNearest(const Pixel& color, const std::vector<Pixel>& palette) {
         if (palette.empty()) return color;
-        
+
         int minDist = color.DistanceSquared(palette[0]);
         size_t nearestIdx = 0;
-        
+
         for (size_t i = 1; i < palette.size(); ++i) {
             int dist = color.DistanceSquared(palette[i]);
             if (dist < minDist) {
@@ -39,7 +41,7 @@ struct Pixel {
                 nearestIdx = i;
             }
         }
-        
+
         return palette[nearestIdx];
     }
 };
@@ -49,12 +51,12 @@ struct ColorPalette {
     std::string name;
     std::vector<Pixel> colors;
     std::string description;
-    
+
     ColorPalette(const std::string& n, const std::vector<Pixel>& c, const std::string& desc = "")
         : name(n), colors(c), description(desc) {}
 };
 
-namespace ColorPalettes {
+namespace palettes {
 
 // PICO-8 Palette (16 colors)
 inline const std::vector<Pixel> PICO8 = {
@@ -187,6 +189,18 @@ inline const std::vector<Pixel> GRAYSCALE_16 = {
     {204, 204, 204, 255}, {221, 221, 221, 255}, {238, 238, 238, 255}, {255, 255, 255, 255}
 };
 
+// Grayscale (8 shades)
+inline const std::vector<Pixel> GRAYSCALE_8 = {
+    {0, 0, 0, 255},
+    {36, 36, 36, 255},
+    {73, 73, 73, 255},
+    {109, 109, 109, 255},
+    {146, 146, 146, 255},
+    {182, 182, 182, 255},
+    {219, 219, 219, 255},
+    {255, 255, 255, 255}
+};
+
 // Monochrome (2 colors)
 inline const std::vector<Pixel> MONOCHROME = {
     {0, 0, 0, 255},
@@ -236,7 +250,7 @@ inline const std::vector<Pixel> AMSTRAD_CPC = {
     {255, 255, 255, 255}  // Bright White
 };
 
-// DB32 (DawnBringer's 32 Color Palette - popular for pixel art)
+// DB32 (DawnBringer's 32 Color Palette)
 inline const std::vector<Pixel> DB32 = {
     {0, 0, 0, 255},       {34, 32, 52, 255},    {69, 40, 60, 255},    {102, 57, 49, 255},
     {143, 86, 59, 255},   {223, 113, 38, 255},  {217, 160, 102, 255}, {238, 195, 154, 255},
@@ -268,6 +282,95 @@ inline const std::vector<Pixel> AAP64 = {
     {162, 240, 148, 255}, {203, 246, 125, 255}, {242, 251, 125, 255}, {254, 232, 146, 255}
 };
 
+// Okabe-Ito (8-color, color-blind friendly)
+inline const std::vector<Pixel> OKABE_ITO = {
+    {0, 0, 0, 255},
+    {230, 159, 0, 255},
+    {86, 180, 233, 255},
+    {0, 158, 115, 255},
+    {240, 228, 66, 255},
+    {0, 114, 178, 255},
+    {213, 94, 0, 255},
+    {204, 121, 167, 255}
+};
+
+// Solarized (16 colors)
+inline const std::vector<Pixel> SOLARIZED = {
+    {0, 43, 54, 255},    // base03
+    {7, 54, 66, 255},    // base02
+    {88, 110, 117, 255}, // base01
+    {101, 123, 131, 255},// base00
+    {131, 148, 150, 255},// base0
+    {147, 161, 161, 255},// base1
+    {238, 232, 213, 255},// base2
+    {253, 246, 227, 255},// base3
+    {181, 137, 0, 255},  // yellow
+    {203, 75, 22, 255},  // orange
+    {220, 50, 47, 255},  // red
+    {211, 54, 130, 255}, // magenta
+    {108, 113, 196, 255},// violet
+    {38, 139, 210, 255}, // blue
+    {42, 161, 152, 255}, // cyan
+    {133, 153, 0, 255}   // green
+};
+
+// Pastel 8 (custom, free-to-use)
+inline const std::vector<Pixel> PASTEL_8 = {
+    {255, 179, 186, 255},
+    {255, 223, 186, 255},
+    {255, 255, 186, 255},
+    {186, 255, 201, 255},
+    {186, 225, 255, 255},
+    {255, 201, 255, 255},
+    {210, 210, 255, 255},
+    {255, 210, 210, 255}
+};
+
+// B16 (Basic 16 - free to use)
+inline const std::vector<Pixel> B16 = {
+    {0, 0, 0, 255},       {255, 255, 255, 255}, {128, 128, 128, 255}, {192, 192, 192, 255},
+    {255, 0, 0, 255},     {0, 255, 0, 255},     {0, 0, 255, 255},     {255, 255, 0, 255},
+    {0, 255, 255, 255},   {255, 0, 255, 255},   {128, 0, 0, 255},     {0, 128, 0, 255},
+    {0, 0, 128, 255},     {128, 128, 0, 255},   {0, 128, 128, 255},   {128, 0, 128, 255}
+};
+
+// MSX (16 colors)
+inline const std::vector<Pixel> MSX = {
+    {0, 0, 0, 255},       {0, 0, 0, 255},       {33, 200, 66, 255},   {94, 220, 120, 255},
+    {84, 85, 237, 255},   {125, 118, 252, 255}, {212, 82, 77, 255},   {66, 235, 245, 255},
+    {252, 85, 84, 255},   {255, 121, 120, 255}, {212, 193, 84, 255},  {230, 206, 128, 255},
+    {33, 176, 59, 255},   {201, 91, 186, 255},  {204, 204, 204, 255}, {255, 255, 255, 255}
+};
+
+// EGA (16 colors)
+inline const std::vector<Pixel> EGA = {
+    {0, 0, 0, 255},       {0, 0, 170, 255},     {0, 170, 0, 255},     {0, 170, 170, 255},
+    {170, 0, 0, 255},     {170, 0, 170, 255},   {170, 85, 0, 255},    {170, 170, 170, 255},
+    {85, 85, 85, 255},    {85, 85, 255, 255},   {85, 255, 85, 255},   {85, 255, 255, 255},
+    {255, 85, 85, 255},   {255, 85, 255, 255},  {255, 255, 85, 255},  {255, 255, 255, 255}
+};
+
+// ANSI (16 colors)
+inline const std::vector<Pixel> ANSI = {
+    {0, 0, 0, 255},       {128, 0, 0, 255},     {0, 128, 0, 255},     {128, 128, 0, 255},
+    {0, 0, 128, 255},     {128, 0, 128, 255},   {0, 128, 128, 255},   {192, 192, 192, 255},
+    {128, 128, 128, 255}, {255, 0, 0, 255},     {0, 255, 0, 255},     {255, 255, 0, 255},
+    {0, 0, 255, 255},     {255, 0, 255, 255},   {0, 255, 255, 255},   {255, 255, 255, 255}
+};
+
+// C64-SC (Pepto)
+inline const std::vector<Pixel> C64_SC = {
+    {0, 0, 0, 255},       {255, 255, 255, 255}, {104, 55, 43, 255},   {112, 164, 178, 255},
+    {111, 61, 134, 255},  {88, 141, 67, 255},   {53, 40, 121, 255},   {184, 199, 111, 255},
+    {111, 79, 37, 255},   {67, 57, 0, 255},     {154, 103, 89, 255},  {68, 68, 68, 255},
+    {108, 108, 108, 255}, {154, 210, 132, 255}, {108, 94, 181, 255},  {149, 149, 149, 255}
+};
+
+// Pokemon Gen1 (4 colors)
+inline const std::vector<Pixel> POKEMON_GEN1 = {
+    {8, 24, 32, 255},     {52, 104, 86, 255},   {136, 192, 112, 255}, {224, 248, 208, 255}
+};
+
 // All palettes organized
 inline std::vector<ColorPalette> GetAllPalettes() {
     return {
@@ -283,8 +386,18 @@ inline std::vector<ColorPalette> GetAllPalettes() {
         {"Amstrad CPC", AMSTRAD_CPC, "Amstrad CPC basic palette (27 colors)"},
         {"DB32", DB32, "DawnBringer's 32 color palette"},
         {"AAP-64", AAP64, "Adigun A. Polack's 64 color palette"},
+        {"B16", B16, "Basic 16 color palette"},
+        {"MSX", MSX, "MSX1 16 color palette"},
+        {"EGA", EGA, "IBM EGA 16 color palette"},
+        {"ANSI", ANSI, "ANSI 16 color palette"},
+        {"C64-SC", C64_SC, "Commodore 64 (Pepto) palette"},
+        {"Pokemon Gen1", POKEMON_GEN1, "Pokemon Gen1 (4 colors)"},
         {"Grayscale 16", GRAYSCALE_16, "16 shades of gray"},
-        {"Monochrome", MONOCHROME, "Pure black & white (2 colors)"}
+        {"Grayscale 8", GRAYSCALE_8, "8 shades of gray"},
+        {"Monochrome", MONOCHROME, "Pure black & white (2 colors)"},
+        {"Okabe-Ito", OKABE_ITO, "Color-blind friendly (8 colors)"},
+        {"Solarized", SOLARIZED, "Solarized theme (16 colors)"},
+        {"Pastel 8", PASTEL_8, "Soft pastel colors (8 colors)"}
     };
 }
 
@@ -302,9 +415,20 @@ inline const std::vector<Pixel>* GetPaletteByName(const std::string& name) {
     if (name == "Amstrad CPC") return &AMSTRAD_CPC;
     if (name == "DB32") return &DB32;
     if (name == "AAP-64") return &AAP64;
+    if (name == "B16") return &B16;
+    if (name == "MSX") return &MSX;
+    if (name == "EGA") return &EGA;
+    if (name == "ANSI") return &ANSI;
+    if (name == "C64-SC") return &C64_SC;
+    if (name == "Pokemon Gen1") return &POKEMON_GEN1;
     if (name == "Grayscale 16") return &GRAYSCALE_16;
+    if (name == "Grayscale 8") return &GRAYSCALE_8;
     if (name == "Monochrome") return &MONOCHROME;
+    if (name == "Okabe-Ito") return &OKABE_ITO;
+    if (name == "Solarized") return &SOLARIZED;
+    if (name == "Pastel 8") return &PASTEL_8;
     return nullptr;
 }
 
-} // namespace ColorPalettes
+} // namespace palettes
+} // namespace pelpaint

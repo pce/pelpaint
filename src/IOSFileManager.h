@@ -10,6 +10,8 @@
 extern "C" {
 #endif
 
+typedef void (*iOS_FilePickerCallback)(void* context, const char* filepath);
+
 // Save file to iOS using the system share sheet
 // This will present UIActivityViewController to let user choose where to save
 // Returns true if the save dialog was presented successfully
@@ -23,6 +25,11 @@ bool iOS_SaveToDocuments(const char* filename, const void* data, size_t dataSize
 // Callback will be called with the file path if user selects a file
 // Returns true if picker was presented successfully
 bool iOS_OpenFilePicker(void (*callback)(const char* filepath));
+
+// Present iOS document picker with a context pointer
+// Callback will be called with the file path if user selects a file
+// Returns true if picker was presented successfully
+bool iOS_OpenFilePickerWithContext(void* context, iOS_FilePickerCallback callback);
 
 // Get the path to the app's Documents directory
 // Returns NULL if failed, otherwise returns a string that must be freed by caller

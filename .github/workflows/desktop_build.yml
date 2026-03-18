@@ -105,3 +105,46 @@ jobs:
             !build/**/*.o
             !build/**/*.ninja
             !build/**/*.cmake
+
+  emscripten-build:
+    name: Emscripten (Web)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Emscripten
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+
+      - name: Configure and Build
+        run: |
+          source emsdk/emsdk_env.sh
+          mkdir build-em
+          cd build-em
+          emcmake cmake .. -DCMAKE_BUILD_TYPE=Release
+          make -j$(nproc)
+
+      - name: Prepare Deployment
+        run: |
+          mkdir dist
+          cp build-em/PixelPaint.html dist/index.html
+          cp build-em/PixelPaint.js dist/
+          cp build-em/PixelPaint.wasm dist/
+
+      - name: Upload Web Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Web Build
+          path: dist/
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
