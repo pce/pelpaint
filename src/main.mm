@@ -5,7 +5,7 @@
 #include <imgui.h>
 #include <implot.h>
 #include "ImGuiFileDialog.h"
-#include "ImGuiStyle.hpp"
+#include "ui/ImGuiStyle.hpp"
 
 #if defined(USE_METAL_BACKEND)
     #include "imgui_impl_sdl3.h"
@@ -161,7 +161,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
     // Setup Dear ImGui style - Unreal Engine theme
-    ImGuiTheme::SetupUnrealTheme();
+    pelpaint::ui::SetupUnrealTheme();
     SDL_Log("ImGui setup complete with Unreal theme\n");
 
     // Setup Platform/Renderer backends

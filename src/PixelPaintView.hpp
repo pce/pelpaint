@@ -25,10 +25,22 @@
 
 namespace fs = std::filesystem;
 
+struct ImageView {
+    const std::uint8_t* data = nullptr; // RGBA8 or another agreed format
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t stride = 0; // bytes per row
+    std::uint32_t channels = 4; // keep flexible, but default RGBA8
+
+    constexpr bool valid() const noexcept {
+        return data != nullptr && width > 0 && height > 0 && stride > 0;
+    }
+};
+
 // Layer data structure - represents a single drawable layer
 struct Layer {
     std::string name;                    // Layer name (e.g., "Background", "Foreground")
-    std::vector<Pixel> pixelData;        // Pixel buffer for this layer
+    std::vector<pelpaint::Pixel> pixelData;        // pelpaint::Pixel buffer for this layer
     float opacity = 1.0f;                // Layer opacity (0.0 - 1.0)
     bool visible = true;                 // Layer visibility toggle
     int zIndex = 0;                      // Z-order (higher = rendered on top)
@@ -39,18 +51,18 @@ struct Layer {
     Layer(const std::string& layerName, int width, int height, int z = 0)
         : name(layerName), opacity(1.0f), visible(true), zIndex(z), locked(false)
     {
-        pixelData.resize(width * height, Pixel(0, 0, 0, 0)); // Transparent by default
+        pixelData.resize(width * height, pelpaint::Pixel(0, 0, 0, 0)); // Transparent by default
     }
 
     // Get blended pixel at (x, y)
-    Pixel GetPixel(int x, int y, int width, int height) const
+    pelpaint::Pixel GetPixel(int x, int y, int width, int height) const
     {
-        if (x < 0 || x >= width || y < 0 || y >= height) return Pixel(0,0,0,0);
+        if (x < 0 || x >= width || y < 0 || y >= height) return pelpaint::Pixel(0,0,0,0);
         return pixelData[y * width + x];
     }
 
     // Set pixel at (x, y)
-    void SetPixel(int x, int y, int width, int height, const Pixel& color)
+    void SetPixel(int x, int y, int width, int height, const pelpaint::Pixel& color)
     {
         if (x < 0 || x >= width || y < 0 || y >= height) return;
         pixelData[y * width + x] = color;
@@ -134,7 +146,7 @@ struct BrushSettings {
 
 // Selection data structure - supports rectangle, circle, and polygon
 struct SelectionData {
-    std::vector<Pixel> pixels;
+    std::vector<pelpaint::Pixel> pixels;
     int width = 0;
     int height = 0;
 
@@ -186,13 +198,15 @@ public:
     // - `AddCheckbox` stores current boolean state in `checkboxValues` keyed by label.
     // Callbacks are invoked when the value changes.
     void AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback);
+    void AddSlider(const std::string& label, int min, int max, int step, int* value);
+    void AddSliderFloat(const std::string& label, float min, float max, float step, float* value);
     void AddCheckbox(const std::string& label, const std::function<void(bool)>& callback);
     void AddButton(const std::string& label, const std::function<void()>& callback);
 
     void ConvertToGrayscale();
-    void ApplyAtkinsonDithering(const std::vector<Pixel>& palette);
-    void ApplyDithering(DitheringType type, const std::vector<Pixel>& palette);
-    void ApplyStuckiDithering(const std::vector<Pixel>& palette);
+    void ApplyAtkinsonDithering(const std::vector<pelpaint::Pixel>& palette);
+    void ApplyDithering(DitheringType type, const std::vector<pelpaint::Pixel>& palette);
+    void ApplyStuckiDithering(const std::vector<pelpaint::Pixel>& palette);
 
 #if defined(USE_METAL_BACKEND)
     void SetMetalDevice(void* device);
@@ -204,7 +218,7 @@ private:
     int canvasHeight = 600;
 
     // Core pixel buffer - the "real" image
-    std::vector<Pixel> canvasData;
+    std::vector<pelpaint::Pixel> canvasData;
 
     // Layer management system
     std::vector<Layer> layers;                      // Stack of layers (index 0 = bottom)
@@ -217,7 +231,7 @@ private:
     void AddLayer(const std::string& name);
     void RemoveLayer(int layerIndex);
     void ReorderLayers(int fromIndex, int toIndex);
-    void CompositeLayers(std::vector<Pixel>& output) const;
+    void CompositeLayers(std::vector<pelpaint::Pixel>& output) const;
     void RenderLayerToCanvas();
     Layer* GetActiveLayer();
     const Layer* GetActiveLayer() const;
@@ -238,18 +252,18 @@ private:
 
     // Canvas operations
     void ResizeCanvas(int newWidth, int newHeight);
-    void ClearCanvas(const Pixel& color = Pixel(0, 0, 0, 255));
+    void ClearCanvas(const pelpaint::Pixel& color = pelpaint::Pixel(0, 0, 0, 255));
 
-    // Pixel operations
-    void PutPixel(int x, int y, const Pixel& color);
-    Pixel GetPixel(int x, int y) const;
+    // pelpaint::Pixel operations
+    void PutPixel(int x, int y, const pelpaint::Pixel& color);
+    pelpaint::Pixel GetPixel(int x, int y) const;
     bool IsValidCoord(int x, int y) const;
 
     // Drawing algorithms
-    void DrawLineBresenham(int x0, int y0, int x1, int y1, const Pixel& color, float brushSize = 1.0f);
-    void DrawCircle(int cx, int cy, int radius, const Pixel& color, bool filled = true);
-    void FloodFill(int x, int y, const Pixel& fillColor);
-    void DrawSpray(int x, int y, float radius, const Pixel& color, float density = 0.3f);
+    void DrawLineBresenham(int x0, int y0, int x1, int y1, const pelpaint::Pixel& color, float brushSize = 1.0f);
+    void DrawCircle(int cx, int cy, int radius, const pelpaint::Pixel& color, bool filled = true);
+    void FloodFill(int x, int y, const pelpaint::Pixel& fillColor);
+    void DrawSpray(int x, int y, float radius, const pelpaint::Pixel& color, float density = 0.3f);
 
     // Palette & Dithering
     bool grayscaleToMono = false;           // Floyd-Steinberg / Ordered grayscale-to-mono
@@ -259,19 +273,19 @@ private:
     int stuckiMatrixDistance = 1;
     int selectedDitheringMethod = 0;        // 0=Floyd-Steinberg, 1=Atkinson, 2=Stucki, 3=Ordered
 
-    void ApplyPalette(const std::vector<Pixel>& palette);
-    void ApplyFloydSteinbergDithering(const std::vector<Pixel>& palette);
-    void ApplyOrderedDithering(const std::vector<Pixel>& palette);
-    Pixel FindNearestPaletteColor(const Pixel& color, const std::vector<Pixel>& palette) const;
+    void ApplyPalette(const std::vector<pelpaint::Pixel>& palette);
+    void ApplyFloydSteinbergDithering(const std::vector<pelpaint::Pixel>& palette);
+    void ApplyOrderedDithering(const std::vector<pelpaint::Pixel>& palette);
+    pelpaint::Pixel FindNearestPaletteColor(const pelpaint::Pixel& color, const std::vector<pelpaint::Pixel>& palette) const;
 
-    // Pixelify/Pixel Art effect
+    // Pixelify/pelpaint::Pixel Art effect
     void ApplyPixelify(int pixelSize, bool usePalette = true);
     int CalculateAutoPixelSize(int imageWidth, int imageHeight) const;
 
     // ShapeRedraw brush tool - Intelligent shape-based painting with shading
-    void DrawShapeRedrawShape(int x, int y, const Pixel& fgColor, const Pixel& bgColor, ShapeRedrawShape shape, int size);
-    Pixel GetShadedColor(const Pixel& baseColor, const Pixel& bgColor, bool darker = false);
-    bool IsColorLight(const Pixel& color) const;
+    void DrawShapeRedrawShape(int x, int y, const pelpaint::Pixel& fgColor, const pelpaint::Pixel& bgColor, ShapeRedrawShape shape, int size);
+    pelpaint::Pixel GetShadedColor(const pelpaint::Pixel& baseColor, const pelpaint::Pixel& bgColor, bool darker = false);
+    bool IsColorLight(const pelpaint::Pixel& color) const;
 
     // ShapeRedraw filter - applies a shape-based pixelization effect to the canvas
     // Each image block is sampled for color, then drawn as a Square, Dot, or Custom shape.
@@ -293,6 +307,8 @@ private:
     bool SaveToJPEG(const std::string& filename, int quality = 90);
     bool SaveToSVGPixel(const std::string& filename);
     bool SaveToSVGVector(const std::string& filename);
+    bool SaveDepthMap(const std::string& filename);
+    bool SaveMesh(const std::string& filename);
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
@@ -307,16 +323,17 @@ private:
 
     // Persistent ImGui control state: values are keyed by the control label
     std::unordered_map<std::string, int> sliderValues;
+    std::unordered_map<std::string, float> sliderFloatValues;
     std::unordered_map<std::string, bool> checkboxValues;
 
     // Drawing state
     DrawTool currentTool = DrawTool::Pencil;
-    Pixel currentColor = Pixel(255, 255, 255, 255);
+    pelpaint::Pixel currentColor = pelpaint::Pixel(255, 255, 255, 255);
     BrushSettings brushSettings;
 
     // Eraser state
     bool eraserUseAlpha = true;
-    Pixel eraserColor = Pixel(255, 0, 255, 255); // Hot pink for visibility
+    pelpaint::Pixel eraserColor = pelpaint::Pixel(255, 0, 255, 255); // Hot pink for visibility
 
     // Tool-specific state
     bool isDrawing = false;
@@ -329,9 +346,9 @@ private:
     ImVec2 cloneSourcePoint = ImVec2(0, 0);
 
     // Palette management
-    std::vector<ColorPalette> availablePalettes;
+    std::vector<pelpaint::ColorPalette> availablePalettes;
     int selectedPaletteIndex = 0;
-    std::vector<Pixel> customPalette;
+    std::vector<pelpaint::Pixel> customPalette;
     bool paletteEnabled = true;
     bool ditheringPreserveAlpha = true;
 
@@ -346,8 +363,13 @@ private:
     int autoPixelifyThreshold = 800;
     bool showPixelifyPreview = true;
 
+    // Export settings
+    int depthMapGridSize = 4;
+    int meshExportGridSize = 4;
+    int meshExportMode = 0;
+
     // ShapeRedraw brush tool settings
-    Pixel shapeRedrawBgColor = Pixel(0, 0, 0, 255);
+    pelpaint::Pixel shapeRedrawBgColor = pelpaint::Pixel(0, 0, 0, 255);
     ShapeRedrawShape shapeRedrawShape = ShapeRedrawShape::Dot;
     int shapeRedrawSize = 4;
     bool shapeRedrawAutoShade = true;
@@ -365,7 +387,7 @@ private:
     SelectionData currentSelection;
 
     // Color picker panel - most frequently used colors
-    std::vector<Pixel> frequentColors;
+    std::vector<pelpaint::Pixel> frequentColors;
     int maxMostUsedColors = 16;
     void UpdateFrequentColors();
 
@@ -396,7 +418,7 @@ private:
     void CopySelection(const ImVec2& startPoint, const ImVec2& endPoint, bool isCircle = false);
     void PasteSelection(const ImVec2& pastePos);
     void BlurSelection(float radius);
-    float ColorDistance(const Pixel& c1, const Pixel& c2) const;
+    float ColorDistance(const pelpaint::Pixel& c1, const pelpaint::Pixel& c2) const;
 
     // Polygon selection
     void AddPolygonPoint(const ImVec2& point);
@@ -406,7 +428,7 @@ private:
     void CopyPolygonSelection();
 
     // Enhanced flood fill with threshold
-    void FloodFillWithThreshold(int x, int y, const Pixel& fillColor, float threshold);
+    void FloodFillWithThreshold(int x, int y, const pelpaint::Pixel& fillColor, float threshold);
 
     // File chooser directory persistence
     void LoadLastDirectory();

@@ -166,6 +166,7 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
     set(APPLE_SOURCES
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.mm
+        src/export/MeshExporter.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
     )
 
@@ -180,6 +181,7 @@ else()
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.cpp
         src/PixelPaintView.cpp
+        src/export/MeshExporter.cpp
     )
 endif()
 

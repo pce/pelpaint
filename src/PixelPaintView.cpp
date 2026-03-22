@@ -1,7 +1,14 @@
 #include "PixelPaintView.hpp"
 #include "ImGuiFileDialog.h"
 #include "export/ImageExporter.hpp"
+#include "export/MeshExporter.hpp"
+#include "ui/Widgets.hpp"
 #include <iostream>
+
+using pelpaint::exporter::ImageExporter;
+using pelpaint::exporter::MeshExporter;
+using pelpaint::exporter::MeshExportOptions;
+using pelpaint::exporter::MeshMode;
 #include <fstream>
 #include <cmath>
 #include <algorithm>
@@ -40,10 +47,10 @@ namespace fs = std::filesystem;
 
 // Constructor
 PixelPaintView::PixelPaintView()
-    : canvasData(canvasWidth * canvasHeight, Pixel(30, 30, 30, 255))
+    : canvasData(canvasWidth * canvasHeight, pelpaint::Pixel(30, 30, 30, 255))
     , canvasSize(static_cast<float>(canvasWidth), static_cast<float>(canvasHeight))
 {
-    availablePalettes = ColorPalettes::GetAllPalettes();
+    availablePalettes = pelpaint::palettes::GetAllPalettes();
     currentFilename = GetDefaultFilename("png");
     grayscaleToMono = false;
 
@@ -66,25 +73,71 @@ PixelPaintView::PixelPaintView()
     undoStack.emplace_back(layers, activeLayerIndex, canvasWidth, canvasHeight, "Initial state");
 }
 
-void PixelPaintView::AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback) {
-    // Persistent slider backed by `sliderValues[label]`.
-    // Initialize to `min` when the slider is first created.
+void PixelPaintView::AddSlider(const std::string& label,
+                               int min,
+                               int max,
+                               int step,
+                               const std::function<void(int)>& callback)
+{
     auto it = sliderValues.find(label);
     if (it == sliderValues.end()) {
         it = sliderValues.emplace(label, min).first;
     }
 
     int value = it->second;
-    // Use ImGui slider; `step` is not directly supported by SliderInt,
-    // but the slider will still constrain to [min,max]. If `step` is important
-    // we could implement +/- buttons; keep simple for now.
-    if (ImGui::SliderInt(label.c_str(), &value, min, max)) {
-        // Value changed by user
+    if (pelpaint::ui::SliderIntStep(label.c_str(), min, max, step, &value)) {
         it->second = value;
         if (callback) callback(value);
+    }
+}
+
+void PixelPaintView::AddSlider(const std::string& label,
+                               int min,
+                               int max,
+                               int step,
+                               int* value)
+{
+    if (!value) return;
+
+    auto it = sliderValues.find(label);
+    if (it == sliderValues.end()) {
+        it = sliderValues.emplace(label, *value).first;
+    } else if (it->second != *value) {
+        it->second = *value;
+    }
+
+    int current = it->second;
+    if (pelpaint::ui::SliderIntStep(label.c_str(), min, max, step, &current)) {
+        current = std::clamp(current, min, max);
+        it->second = current;
+        *value = current;
     } else {
-        // Keep stored value in sync (covers external changes)
-        it->second = value;
+        *value = current;
+    }
+}
+
+void PixelPaintView::AddSliderFloat(const std::string& label,
+                                    float min,
+                                    float max,
+                                    float step,
+                                    float* value)
+{
+    if (!value) return;
+
+    auto it = sliderFloatValues.find(label);
+    if (it == sliderFloatValues.end()) {
+        it = sliderFloatValues.emplace(label, *value).first;
+    } else if (it->second != *value) {
+        it->second = *value;
+    }
+
+    float current = it->second;
+    if (pelpaint::ui::SliderFloatStep(label.c_str(), min, max, step, &current)) {
+        current = std::clamp(current, min, max);
+        it->second = current;
+        *value = current;
+    } else {
+        *value = current;
     }
 }
 
@@ -160,7 +213,7 @@ void PixelPaintView::ReorderLayers(int fromIndex, int toIndex)
 }
 
 // Composite all visible layers into output buffer
-void PixelPaintView::CompositeLayers(std::vector<Pixel>& output) const
+void PixelPaintView::CompositeLayers(std::vector<pelpaint::Pixel>& output) const
 {
     output.assign(canvasData.begin(), canvasData.end());
 
@@ -176,7 +229,7 @@ void PixelPaintView::CompositeLayers(std::vector<Pixel>& output) const
         if (!layer->visible) continue;
 
         for (size_t i = 0; i < output.size(); ++i) {
-            const Pixel& layerPixel = layer->pixelData[i];
+            const pelpaint::Pixel& layerPixel = layer->pixelData[i];
             if (layerPixel.a == 0) continue;  // Skip transparent pixels
 
             // Simple alpha blending
@@ -304,7 +357,7 @@ void PixelPaintView::ResizeCanvas(int newWidth, int newHeight)
 {
     // Resize all layers
     for (auto& layer : layers) {
-        std::vector<Pixel> newData(newWidth * newHeight, Pixel(0, 0, 0, 0));
+        std::vector<pelpaint::Pixel> newData(newWidth * newHeight, pelpaint::Pixel(0, 0, 0, 0));
 
         int copyWidth = std::min(canvasWidth, newWidth);
         int copyHeight = std::min(canvasHeight, newHeight);
@@ -322,14 +375,14 @@ void PixelPaintView::ResizeCanvas(int newWidth, int newHeight)
 
     canvasWidth = newWidth;
     canvasHeight = newHeight;
-    canvasData.assign(canvasWidth * canvasHeight, Pixel(0, 0, 0, 0));
+    canvasData.assign(canvasWidth * canvasHeight, pelpaint::Pixel(0, 0, 0, 0));
 
     RenderLayerToCanvas();
     textureNeedsUpdate = true;
 }
 
 // Clear canvas
-void PixelPaintView::ClearCanvas(const Pixel& color)
+void PixelPaintView::ClearCanvas(const pelpaint::Pixel& color)
 {
     if (activeLayerIndex >= 0 && activeLayerIndex < static_cast<int>(layers.size())) {
         Layer& activeLayer = layers[activeLayerIndex];
@@ -342,7 +395,7 @@ void PixelPaintView::ClearCanvas(const Pixel& color)
 }
 
 // Put pixel
-void PixelPaintView::PutPixel(int x, int y, const Pixel& color)
+void PixelPaintView::PutPixel(int x, int y, const pelpaint::Pixel& color)
 {
     if (!IsValidCoord(x, y)) return;
     if (activeLayerIndex < 0 || activeLayerIndex >= static_cast<int>(layers.size())) return;
@@ -351,7 +404,7 @@ void PixelPaintView::PutPixel(int x, int y, const Pixel& color)
     if (activeLayer.locked) return;  // Don't draw on locked layers
 
     int index = GetPixelIndex(x, y);
-    Pixel& pixel = activeLayer.pixelData[index];
+    pelpaint::Pixel& pixel = activeLayer.pixelData[index];
 
     if (color.a == 255) {
         pixel = color;
@@ -368,9 +421,9 @@ void PixelPaintView::PutPixel(int x, int y, const Pixel& color)
 }
 
 // Get pixel from active layer
-Pixel PixelPaintView::GetPixel(int x, int y) const
+pelpaint::Pixel PixelPaintView::GetPixel(int x, int y) const
 {
-    if (!IsValidCoord(x, y)) return Pixel(0, 0, 0, 0);
+    if (!IsValidCoord(x, y)) return pelpaint::Pixel(0, 0, 0, 0);
     if (activeLayerIndex < 0 || activeLayerIndex >= static_cast<int>(layers.size())) {
         return canvasData[GetPixelIndex(x, y)];
     }
@@ -390,7 +443,7 @@ int PixelPaintView::GetPixelIndex(int x, int y) const
 }
 
 // Bresenham line drawing
-void PixelPaintView::DrawLineBresenham(int x0, int y0, int x1, int y1, const Pixel& color, float brushSize)
+void PixelPaintView::DrawLineBresenham(int x0, int y0, int x1, int y1, const pelpaint::Pixel& color, float brushSize)
 {
     int dx = std::abs(x1 - x0);
     int dy = std::abs(y1 - y0);
@@ -418,7 +471,7 @@ void PixelPaintView::DrawLineBresenham(int x0, int y0, int x1, int y1, const Pix
 }
 
 // Circle drawing
-void PixelPaintView::DrawCircle(int cx, int cy, int radius, const Pixel& color, bool filled)
+void PixelPaintView::DrawCircle(int cx, int cy, int radius, const pelpaint::Pixel& color, bool filled)
 {
     if (filled) {
         for (int y = -radius; y <= radius; ++y) {
@@ -455,13 +508,13 @@ void PixelPaintView::DrawCircle(int cx, int cy, int radius, const Pixel& color, 
 }
 
 // Flood fill
-void PixelPaintView::FloodFill(int x, int y, const Pixel& fillColor)
+void PixelPaintView::FloodFill(int x, int y, const pelpaint::Pixel& fillColor)
 {
     if (!IsValidCoord(x, y)) return;
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer || activeLayer->locked) return;
 
-    Pixel targetColor = GetPixel(x, y);
+    pelpaint::Pixel targetColor = GetPixel(x, y);
     if (targetColor.r == fillColor.r && targetColor.g == fillColor.g &&
         targetColor.b == fillColor.b && targetColor.a == fillColor.a) {
         return;
@@ -480,7 +533,7 @@ void PixelPaintView::FloodFill(int x, int y, const Pixel& fillColor)
 
         if (!IsValidCoord(cx, cy)) continue;
 
-        Pixel currentColor = GetPixel(cx, cy);
+        pelpaint::Pixel currentColor = GetPixel(cx, cy);
         if (currentColor.r != targetColor.r || currentColor.g != targetColor.g ||
             currentColor.b != targetColor.b || currentColor.a != targetColor.a) {
             continue;
@@ -488,7 +541,7 @@ void PixelPaintView::FloodFill(int x, int y, const Pixel& fillColor)
 
         // Write directly to layer without PutPixel overhead
         int index = GetPixelIndex(cx, cy);
-        Pixel& pixel = activeLayer->pixelData[index];
+        pelpaint::Pixel& pixel = activeLayer->pixelData[index];
 
         if (fillColor.a == 255) {
             pixel = fillColor;
@@ -522,13 +575,13 @@ void PixelPaintView::FloodFill(int x, int y, const Pixel& fillColor)
 }
 
 // Flood fill with threshold
-void PixelPaintView::FloodFillWithThreshold(int x, int y, const Pixel& fillColor, float threshold)
+void PixelPaintView::FloodFillWithThreshold(int x, int y, const pelpaint::Pixel& fillColor, float threshold)
 {
     if (!IsValidCoord(x, y)) return;
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer || activeLayer->locked) return;
 
-    Pixel targetColor = GetPixel(x, y);
+    pelpaint::Pixel targetColor = GetPixel(x, y);
     std::queue<std::pair<int, int>> queue;
     std::vector<bool> visited(canvasWidth * canvasHeight, false);
 
@@ -543,7 +596,7 @@ void PixelPaintView::FloodFillWithThreshold(int x, int y, const Pixel& fillColor
         // Write directly to layer without PutPixel overhead
         if (IsValidCoord(cx, cy)) {
             int index = GetPixelIndex(cx, cy);
-            Pixel& pixel = activeLayer->pixelData[index];
+            pelpaint::Pixel& pixel = activeLayer->pixelData[index];
 
             if (fillColor.a == 255) {
                 pixel = fillColor;
@@ -566,7 +619,7 @@ void PixelPaintView::FloodFillWithThreshold(int x, int y, const Pixel& fillColor
             if (!IsValidCoord(nx, ny)) continue;
             if (visited[GetPixelIndex(nx, ny)]) continue;
 
-            Pixel neighborColor = GetPixel(nx, ny);
+            pelpaint::Pixel neighborColor = GetPixel(nx, ny);
             float distance = ColorDistance(targetColor, neighborColor);
 
             if (distance <= threshold) {
@@ -583,7 +636,7 @@ void PixelPaintView::FloodFillWithThreshold(int x, int y, const Pixel& fillColor
 }
 
 // Spray tool
-void PixelPaintView::DrawSpray(int x, int y, float radius, const Pixel& color, float density)
+void PixelPaintView::DrawSpray(int x, int y, float radius, const pelpaint::Pixel& color, float density)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer || activeLayer->locked) return;
@@ -601,7 +654,7 @@ void PixelPaintView::DrawSpray(int x, int y, float radius, const Pixel& color, f
         // Write directly to layer without PutPixel overhead
         if (IsValidCoord(px, py)) {
             int index = GetPixelIndex(px, py);
-            Pixel& pixel = activeLayer->pixelData[index];
+            pelpaint::Pixel& pixel = activeLayer->pixelData[index];
 
             if (color.a == 255) {
                 pixel = color;
@@ -621,7 +674,7 @@ void PixelPaintView::DrawSpray(int x, int y, float radius, const Pixel& color, f
 }
 
 // Color distance for dithering and flood fill
-float PixelPaintView::ColorDistance(const Pixel& c1, const Pixel& c2) const
+float PixelPaintView::ColorDistance(const pelpaint::Pixel& c1, const pelpaint::Pixel& c2) const
 {
     int dr = static_cast<int>(c1.r) - static_cast<int>(c2.r);
     int dg = static_cast<int>(c1.g) - static_cast<int>(c2.g);
@@ -632,11 +685,11 @@ float PixelPaintView::ColorDistance(const Pixel& c1, const Pixel& c2) const
 }
 
 // Find nearest palette color
-Pixel PixelPaintView::FindNearestPaletteColor(const Pixel& color, const std::vector<Pixel>& palette) const
+pelpaint::Pixel PixelPaintView::FindNearestPaletteColor(const pelpaint::Pixel& color, const std::vector<pelpaint::Pixel>& palette) const
 {
     if (palette.empty()) return color;
 
-    Pixel nearest = palette[0];
+    pelpaint::Pixel nearest = palette[0];
     float minDistance = ColorDistance(color, palette[0]);
 
     for (const auto& paletteColor : palette) {
@@ -664,7 +717,7 @@ void PixelPaintView::DiffuseError(int x, int y, int errorR, int errorG, int erro
             int ny = y + dy;
 
             if (IsValidCoord(nx, ny)) {
-                Pixel& neighbor = activeLayer->pixelData[GetPixelIndex(nx, ny)];
+                pelpaint::Pixel& neighbor = activeLayer->pixelData[GetPixelIndex(nx, ny)];
                 // Apply clamped error diffusion to avoid overflow/underflow
                 neighbor.r = static_cast<uint8_t>(std::clamp(static_cast<int>(neighbor.r) + (errorR * divisor) / totalWeight, 0, 255));
                 neighbor.g = static_cast<uint8_t>(std::clamp(static_cast<int>(neighbor.g) + (errorG * divisor) / totalWeight, 0, 255));
@@ -676,7 +729,7 @@ void PixelPaintView::DiffuseError(int x, int y, int errorR, int errorG, int erro
 
 
 // Apply palette
-void PixelPaintView::ApplyPalette(const std::vector<Pixel>& palette)
+void PixelPaintView::ApplyPalette(const std::vector<pelpaint::Pixel>& palette)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
@@ -690,17 +743,17 @@ void PixelPaintView::ApplyPalette(const std::vector<Pixel>& palette)
 }
 
 // Floyd-Steinberg dithering
-void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& palette)
+void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<pelpaint::Pixel>& palette)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
 
-    std::vector<Pixel> tempData = activeLayer->pixelData;
+    std::vector<pelpaint::Pixel> tempData = activeLayer->pixelData;
 
     for (int y = 0; y < canvasHeight; ++y) {
         for (int x = 0; x < canvasWidth; ++x) {
-            Pixel oldPixel = tempData[GetPixelIndex(x, y)];
-            Pixel newPixel = FindNearestPaletteColor(oldPixel, palette);
+            pelpaint::Pixel oldPixel = tempData[GetPixelIndex(x, y)];
+            pelpaint::Pixel newPixel = FindNearestPaletteColor(oldPixel, palette);
 
             if (ditheringPreserveAlpha) {
                 newPixel.a = oldPixel.a;
@@ -713,7 +766,7 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
             int errorB = static_cast<int>(oldPixel.b) - static_cast<int>(newPixel.b);
 
             if (x + 1 < canvasWidth) {
-                Pixel& neighbor = tempData[GetPixelIndex(x + 1, y)];
+                pelpaint::Pixel& neighbor = tempData[GetPixelIndex(x + 1, y)];
                 neighbor.r = std::clamp(static_cast<int>(neighbor.r) + errorR * 7 / 16, 0, 255);
                 neighbor.g = std::clamp(static_cast<int>(neighbor.g) + errorG * 7 / 16, 0, 255);
                 neighbor.b = std::clamp(static_cast<int>(neighbor.b) + errorB * 7 / 16, 0, 255);
@@ -721,19 +774,19 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<Pixel>& pale
 
             if (y + 1 < canvasHeight) {
                 if (x - 1 >= 0) {
-                    Pixel& neighbor = tempData[GetPixelIndex(x - 1, y + 1)];
+                    pelpaint::Pixel& neighbor = tempData[GetPixelIndex(x - 1, y + 1)];
                     neighbor.r = std::clamp(static_cast<int>(neighbor.r) + errorR * 3 / 16, 0, 255);
                     neighbor.g = std::clamp(static_cast<int>(neighbor.g) + errorG * 3 / 16, 0, 255);
                     neighbor.b = std::clamp(static_cast<int>(neighbor.b) + errorB * 3 / 16, 0, 255);
                 }
 
-                Pixel& neighbor = tempData[GetPixelIndex(x, y + 1)];
+                pelpaint::Pixel& neighbor = tempData[GetPixelIndex(x, y + 1)];
                 neighbor.r = std::clamp(static_cast<int>(neighbor.r) + errorR * 5 / 16, 0, 255);
                 neighbor.g = std::clamp(static_cast<int>(neighbor.g) + errorG * 5 / 16, 0, 255);
                 neighbor.b = std::clamp(static_cast<int>(neighbor.b) + errorB * 5 / 16, 0, 255);
 
                 if (x + 1 < canvasWidth) {
-                    Pixel& neighbor = tempData[GetPixelIndex(x + 1, y + 1)];
+                    pelpaint::Pixel& neighbor = tempData[GetPixelIndex(x + 1, y + 1)];
                     neighbor.r = std::clamp(static_cast<int>(neighbor.r) + errorR * 1 / 16, 0, 255);
                     neighbor.g = std::clamp(static_cast<int>(neighbor.g) + errorG * 1 / 16, 0, 255);
                     neighbor.b = std::clamp(static_cast<int>(neighbor.b) + errorB * 1 / 16, 0, 255);
@@ -795,7 +848,7 @@ void PixelPaintView::ConvertToGrayscale()
 }
 
 
-void PixelPaintView::ApplyAtkinsonDithering(const std::vector<Pixel>& palette)
+void PixelPaintView::ApplyAtkinsonDithering(const std::vector<pelpaint::Pixel>& palette)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
@@ -803,8 +856,8 @@ void PixelPaintView::ApplyAtkinsonDithering(const std::vector<Pixel>& palette)
     // Iterate over each pixel in the canvas
     for (int y = 0; y < canvasHeight; ++y) {
         for (int x = 0; x < canvasWidth; ++x) {
-            Pixel& currentPixel = activeLayer->pixelData[GetPixelIndex(x, y)];
-            Pixel closestColor = FindNearestPaletteColor(currentPixel, palette);
+            pelpaint::Pixel& currentPixel = activeLayer->pixelData[GetPixelIndex(x, y)];
+            pelpaint::Pixel closestColor = FindNearestPaletteColor(currentPixel, palette);
 
             // Calculate the error
             int errorR = currentPixel.r - closestColor.r;
@@ -824,7 +877,7 @@ void PixelPaintView::ApplyAtkinsonDithering(const std::vector<Pixel>& palette)
 
 
 
-void PixelPaintView::ApplyStuckiDithering(const std::vector<Pixel>& palette)
+void PixelPaintView::ApplyStuckiDithering(const std::vector<pelpaint::Pixel>& palette)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
@@ -832,8 +885,8 @@ void PixelPaintView::ApplyStuckiDithering(const std::vector<Pixel>& palette)
     // Iterate over each pixel in the canvas
     for (int y = 0; y < canvasHeight; ++y) {
         for (int x = 0; x < canvasWidth; ++x) {
-            Pixel& currentPixel = activeLayer->pixelData[GetPixelIndex(x, y)];
-            Pixel closestColor = FindNearestPaletteColor(currentPixel, palette);
+            pelpaint::Pixel& currentPixel = activeLayer->pixelData[GetPixelIndex(x, y)];
+            pelpaint::Pixel closestColor = FindNearestPaletteColor(currentPixel, palette);
 
             // Calculate the error
             int errorR = currentPixel.r - closestColor.r;
@@ -854,7 +907,7 @@ void PixelPaintView::ApplyStuckiDithering(const std::vector<Pixel>& palette)
 
 
 // Ordered dithering
-void PixelPaintView::ApplyOrderedDithering(const std::vector<Pixel>& palette)
+void PixelPaintView::ApplyOrderedDithering(const std::vector<pelpaint::Pixel>& palette)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
@@ -869,16 +922,16 @@ void PixelPaintView::ApplyOrderedDithering(const std::vector<Pixel>& palette)
 
     for (int y = 0; y < canvasHeight; ++y) {
         for (int x = 0; x < canvasWidth; ++x) {
-            Pixel pixel = activeLayer->pixelData[GetPixelIndex(x, y)];
+            pelpaint::Pixel pixel = activeLayer->pixelData[GetPixelIndex(x, y)];
             int ditherValue = ditherPattern[y % ditherPatternSize][x % ditherPatternSize];
 
-            Pixel ditheredPixel;
+            pelpaint::Pixel ditheredPixel;
             ditheredPixel.r = std::clamp(static_cast<int>(pixel.r) + ditherValue - 8, 0, 255);
             ditheredPixel.g = std::clamp(static_cast<int>(pixel.g) + ditherValue - 8, 0, 255);
             ditheredPixel.b = std::clamp(static_cast<int>(pixel.b) + ditherValue - 8, 0, 255);
             ditheredPixel.a = pixel.a;
 
-            Pixel quantized = FindNearestPaletteColor(ditheredPixel, palette);
+            pelpaint::Pixel quantized = FindNearestPaletteColor(ditheredPixel, palette);
 
             if (ditheringPreserveAlpha) {
                 quantized.a = pixel.a;
@@ -901,10 +954,10 @@ void PixelPaintView::ApplyPixelify(int pixelSize, bool usePalette)
     if (!activeLayer || pixelSize < 1) return;
 
     // Create output buffer
-    std::vector<Pixel> result = activeLayer->pixelData;
+    std::vector<pelpaint::Pixel> result = activeLayer->pixelData;
 
     // Get the palette to use for quantization
-    const std::vector<Pixel>& palette = customPalette.empty() ? availablePalettes[selectedPaletteIndex].colors : customPalette;
+    const std::vector<pelpaint::Pixel>& palette = customPalette.empty() ? availablePalettes[selectedPaletteIndex].colors : customPalette;
 
     // Process the image in blocks
     for (int blockY = 0; blockY < canvasHeight; blockY += pixelSize) {
@@ -919,7 +972,7 @@ void PixelPaintView::ApplyPixelify(int pixelSize, bool usePalette)
 
             for (int y = blockY; y < maxY; ++y) {
                 for (int x = blockX; x < maxX; ++x) {
-                    Pixel p = activeLayer->pixelData[GetPixelIndex(x, y)];
+                    pelpaint::Pixel p = activeLayer->pixelData[GetPixelIndex(x, y)];
                     sumR += p.r;
                     sumG += p.g;
                     sumB += p.b;
@@ -929,7 +982,7 @@ void PixelPaintView::ApplyPixelify(int pixelSize, bool usePalette)
             }
 
             // Calculate average color
-            Pixel averageColor;
+            pelpaint::Pixel averageColor;
             averageColor.r = static_cast<uint8_t>(sumR / pixelCount);
             averageColor.g = static_cast<uint8_t>(sumG / pixelCount);
             averageColor.b = static_cast<uint8_t>(sumB / pixelCount);
@@ -972,9 +1025,9 @@ int PixelPaintView::CalculateAutoPixelSize(int imageWidth, int imageHeight) cons
 }
 
 // Smart Repaint - Get shaded color based on background brightness
-Pixel PixelPaintView::GetShadedColor(const Pixel& baseColor, const Pixel& bgColor, bool darker)
+pelpaint::Pixel PixelPaintView::GetShadedColor(const pelpaint::Pixel& baseColor, const pelpaint::Pixel& bgColor, bool darker)
 {
-    Pixel result = baseColor;
+    pelpaint::Pixel result = baseColor;
 
     // Calculate brightness of background color
     float bgBrightness = (bgColor.r + bgColor.g + bgColor.b) / (3.0f * 255.0f);
@@ -998,20 +1051,20 @@ Pixel PixelPaintView::GetShadedColor(const Pixel& baseColor, const Pixel& bgColo
 }
 
 // Smart Repaint - Check if color is light or dark
-bool PixelPaintView::IsColorLight(const Pixel& color) const
+bool PixelPaintView::IsColorLight(const pelpaint::Pixel& color) const
 {
     float brightness = (color.r + color.g + color.b) / (3.0f * 255.0f);
     return brightness > 0.5f;
 }
 
 // Smart Repaint - Draw shape with intelligent shading
-void PixelPaintView::DrawShapeRedrawShape(int cx, int cy, const Pixel& fgColor, const Pixel& bgColor, ShapeRedrawShape shape, int size)
+void PixelPaintView::DrawShapeRedrawShape(int cx, int cy, const pelpaint::Pixel& fgColor, const pelpaint::Pixel& bgColor, ShapeRedrawShape shape, int size)
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
 
-    Pixel lightColor = GetShadedColor(fgColor, bgColor, false);
-    Pixel darkColor = GetShadedColor(fgColor, bgColor, true);
+    pelpaint::Pixel lightColor = GetShadedColor(fgColor, bgColor, false);
+    pelpaint::Pixel darkColor = GetShadedColor(fgColor, bgColor, true);
 
     switch (shape) {
         case ShapeRedrawShape::Dot: {
@@ -1027,7 +1080,7 @@ void PixelPaintView::DrawShapeRedrawShape(int cx, int cy, const Pixel& fgColor, 
                         int x = cx + dx;
                         int y = cy + dy;
                         bool isEdge = (dx * dx + dy * dy > (radius - 1) * (radius - 1));
-                        Pixel color = isEdge ? darkColor : fgColor;
+                        pelpaint::Pixel color = isEdge ? darkColor : fgColor;
                         PutPixel(x, y, color);
                     }
                 }
@@ -1042,7 +1095,7 @@ void PixelPaintView::DrawShapeRedrawShape(int cx, int cy, const Pixel& fgColor, 
                     int x = cx + dx;
                     int y = cy + dy;
                     bool isEdge = (std::abs(dx) == halfSize || std::abs(dy) == halfSize);
-                    Pixel color = isEdge ? darkColor : fgColor;
+                    pelpaint::Pixel color = isEdge ? darkColor : fgColor;
                     PutPixel(x, y, color);
                 }
             }
@@ -1096,19 +1149,19 @@ void PixelPaintView::ApplyShapeRedrawFilter()
 
     const int blockSize = std::max(1, shapeRedrawFilterBlockSize);
     const int padding   = std::max(0, shapeRedrawFilterPadding);
-    const std::vector<Pixel>& palette =
+    const std::vector<pelpaint::Pixel>& palette =
         customPalette.empty() ? availablePalettes[selectedPaletteIndex].colors : customPalette;
 
     // Determine background pixel
-    Pixel bgPixel;
+    pelpaint::Pixel bgPixel;
     switch (shapeRedrawBgMode) {
-        case ShapeRedrawBgMode::Black: bgPixel = Pixel(0,   0,   0,   255); break;
-        case ShapeRedrawBgMode::White: bgPixel = Pixel(255, 255, 255, 255); break;
-        case ShapeRedrawBgMode::Alpha: bgPixel = Pixel(0,   0,   0,   0);   break;
+        case ShapeRedrawBgMode::Black: bgPixel = pelpaint::Pixel(0,   0,   0,   255); break;
+        case ShapeRedrawBgMode::White: bgPixel = pelpaint::Pixel(255, 255, 255, 255); break;
+        case ShapeRedrawBgMode::Alpha: bgPixel = pelpaint::Pixel(0,   0,   0,   0);   break;
     }
 
     // Work on a fresh output buffer, initialized to the background color
-    std::vector<Pixel> result(canvasWidth * canvasHeight, bgPixel);
+    std::vector<pelpaint::Pixel> result(canvasWidth * canvasHeight, bgPixel);
 
     for (int blockY = 0; blockY < canvasHeight; blockY += blockSize) {
         for (int blockX = 0; blockX < canvasWidth; blockX += blockSize) {
@@ -1119,14 +1172,14 @@ void PixelPaintView::ApplyShapeRedrawFilter()
             int sumR = 0, sumG = 0, sumB = 0, sumA = 0, count = 0;
             for (int y = blockY; y < maxY; ++y) {
                 for (int x = blockX; x < maxX; ++x) {
-                    Pixel p = activeLayer->pixelData[GetPixelIndex(x, y)];
+                    pelpaint::Pixel p = activeLayer->pixelData[GetPixelIndex(x, y)];
                     sumR += p.r; sumG += p.g; sumB += p.b; sumA += p.a;
                     ++count;
                 }
             }
             if (count == 0) continue;
 
-            Pixel avgColor;
+            pelpaint::Pixel avgColor;
             avgColor.r = static_cast<uint8_t>(sumR / count);
             avgColor.g = static_cast<uint8_t>(sumG / count);
             avgColor.b = static_cast<uint8_t>(sumB / count);
@@ -1258,7 +1311,7 @@ void PixelPaintView::ClearUndoStack()
 // File I/O
 bool PixelPaintView::SaveToTGA(const std::string& filename)
 {
-    std::vector<Pixel> composite;
+    std::vector<pelpaint::Pixel> composite;
     CompositeLayers(composite);
 
     FILE* file = fopen(filename.c_str(), "wb");
@@ -1293,7 +1346,7 @@ bool PixelPaintView::SaveToTGA(const std::string& filename)
 
 bool PixelPaintView::SaveToPNG(const std::string& filename)
 {
-    std::vector<Pixel> composite;
+    std::vector<pelpaint::Pixel> composite;
     CompositeLayers(composite);
 
     std::vector<uint8_t> pngData;
@@ -1319,11 +1372,18 @@ bool PixelPaintView::SaveToPNG(const std::string& filename)
 
 bool PixelPaintView::SaveToSVGPixel(const std::string& filename)
 {
-    std::vector<Pixel> composite;
+    std::vector<pelpaint::Pixel> composite;
     CompositeLayers(composite);
 
+    ImageView view;
+    view.data = reinterpret_cast<const std::uint8_t*>(composite.data());
+    view.width = static_cast<std::uint32_t>(canvasWidth);
+    view.height = static_cast<std::uint32_t>(canvasHeight);
+    view.stride = view.width * 4;
+    view.channels = 4;
+
     // Implementation uses optimized greedy rectangle merging
-    bool success = ImageExporter::SaveToSVGOptimized(filename, canvasWidth, canvasHeight, composite);
+    bool success = ImageExporter::SaveToSVGOptimized(filename, view);
     if (success) {
         fs::path p(filename);
         SaveLastDirectory(p.parent_path().string());
@@ -1333,11 +1393,18 @@ bool PixelPaintView::SaveToSVGPixel(const std::string& filename)
 
 bool PixelPaintView::SaveToSVGVector(const std::string& filename)
 {
-    std::vector<Pixel> composite;
+    std::vector<pelpaint::Pixel> composite;
     CompositeLayers(composite);
 
+    ImageView view;
+    view.data = reinterpret_cast<const std::uint8_t*>(composite.data());
+    view.width = static_cast<std::uint32_t>(canvasWidth);
+    view.height = static_cast<std::uint32_t>(canvasHeight);
+    view.stride = view.width * 4;
+    view.channels = 4;
+
     // Implementation uses optimized greedy rectangle merging with vector styling
-    bool success = ImageExporter::SaveToSVGVector(filename, canvasWidth, canvasHeight, composite);
+    bool success = ImageExporter::SaveToSVGVector(filename, view);
     if (success) {
         fs::path p(filename);
         SaveLastDirectory(p.parent_path().string());
@@ -1345,9 +1412,72 @@ bool PixelPaintView::SaveToSVGVector(const std::string& filename)
     return success;
 }
 
+bool PixelPaintView::SaveDepthMap(const std::string& filename)
+{
+    if (depthMapGridSize < 1) depthMapGridSize = 1;
+
+    std::vector<pelpaint::Pixel> composite;
+    CompositeLayers(composite);
+
+    ImageView view;
+    view.data = reinterpret_cast<const std::uint8_t*>(composite.data());
+    view.width = static_cast<std::uint32_t>(canvasWidth);
+    view.height = static_cast<std::uint32_t>(canvasHeight);
+    view.stride = view.width * 4;
+    view.channels = 4;
+
+    bool success = ImageExporter::SaveDepthMap(
+        view,
+        static_cast<std::uint32_t>(depthMapGridSize),
+        filename
+    );
+
+    if (success) {
+        fs::path p(filename);
+        SaveLastDirectory(p.parent_path().string());
+    }
+
+    return success;
+}
+
+bool PixelPaintView::SaveMesh(const std::string& filename)
+{
+    if (meshExportGridSize < 1) meshExportGridSize = 1;
+
+    std::vector<pelpaint::Pixel> composite;
+    CompositeLayers(composite);
+
+    ImageView view;
+    view.data = reinterpret_cast<const std::uint8_t*>(composite.data());
+    view.width = static_cast<std::uint32_t>(canvasWidth);
+    view.height = static_cast<std::uint32_t>(canvasHeight);
+    view.stride = view.width * 4;
+    view.channels = 4;
+
+    MeshExportOptions options;
+    options.mode = static_cast<MeshMode>(meshExportMode);
+    options.gridSize = static_cast<std::uint32_t>(meshExportGridSize);
+    options.depthScale = 1.0f;
+    options.useVertexColors = true;
+    options.optimizeMesh = true;
+
+    pelpaint::ColorPalette fallback("Default", {});
+    const bool paletteOk = selectedPaletteIndex >= 0 &&
+                           selectedPaletteIndex < static_cast<int>(availablePalettes.size());
+    const pelpaint::ColorPalette& palette = paletteOk ? availablePalettes[selectedPaletteIndex] : fallback;
+
+    bool success = MeshExporter::SaveAsMesh(filename, view, palette, options);
+    if (success) {
+        fs::path p(filename);
+        SaveLastDirectory(p.parent_path().string());
+    }
+
+    return success;
+}
+
 bool PixelPaintView::SaveToJPEG(const std::string& filename, int quality)
 {
-    std::vector<Pixel> composite;
+    std::vector<pelpaint::Pixel> composite;
     CompositeLayers(composite);
 
     std::vector<uint8_t> jpegData;
@@ -1444,7 +1574,7 @@ void PixelPaintView::CropToSelection()
 
     // Extract cropped data for each layer
     for (auto& layer : layers) {
-        std::vector<Pixel> croppedData(newWidth * newHeight);
+        std::vector<pelpaint::Pixel> croppedData(newWidth * newHeight);
         for (int y = 0; y < newHeight; ++y) {
             for (int x = 0; x < newWidth; ++x) {
                 croppedData[y * newWidth + x] = layer.pixelData[(y1 + y) * canvasWidth + (x1 + x)];
@@ -1455,7 +1585,7 @@ void PixelPaintView::CropToSelection()
 
     canvasWidth = newWidth;
     canvasHeight = newHeight;
-    canvasData.assign(canvasWidth * canvasHeight, Pixel(0, 0, 0, 0));
+    canvasData.assign(canvasWidth * canvasHeight, pelpaint::Pixel(0, 0, 0, 0));
 
     currentSelection.isActive = false;
     RenderLayerToCanvas();
@@ -1669,7 +1799,7 @@ void PixelPaintView::UpdateFrequentColors()
     frequentColors.clear();
     for (size_t i = 0; i < sortedColors.size() && i < maxMostUsedColors; ++i) {
         uint32_t key = sortedColors[i].first;
-        frequentColors.push_back(Pixel(
+        frequentColors.push_back(pelpaint::Pixel(
             (key >> 24) & 0xFF,
             (key >> 16) & 0xFF,
             (key >> 8) & 0xFF,
@@ -1757,7 +1887,7 @@ void PixelPaintView::BlurSelection(float radius)
     int x2 = static_cast<int>(currentSelection.selectionEnd.x);
     int y2 = static_cast<int>(currentSelection.selectionEnd.y);
 
-    std::vector<Pixel> blurredData = canvasData;
+    std::vector<pelpaint::Pixel> blurredData = canvasData;
     int kernelSize = static_cast<int>(radius);
 
     for (int y = y1; y <= y2; ++y) {
@@ -1772,7 +1902,7 @@ void PixelPaintView::BlurSelection(float radius)
                     int ny = y + ky;
 
                     if (IsValidCoord(nx, ny)) {
-                        Pixel p = canvasData[GetPixelIndex(nx, ny)];
+                        pelpaint::Pixel p = canvasData[GetPixelIndex(nx, ny)];
                         r += p.r;
                         g += p.g;
                         b += p.b;
@@ -1783,7 +1913,7 @@ void PixelPaintView::BlurSelection(float radius)
             }
 
             if (count > 0) {
-                blurredData[GetPixelIndex(x, y)] = Pixel(
+                blurredData[GetPixelIndex(x, y)] = pelpaint::Pixel(
                     static_cast<uint8_t>(r / count),
                     static_cast<uint8_t>(g / count),
                     static_cast<uint8_t>(b / count),
@@ -1884,7 +2014,7 @@ void PixelPaintView::CopyPolygonSelection()
     currentSelection.width = x2 - x1 + 1;
     currentSelection.height = y2 - y1 + 1;
     currentSelection.pixels.clear();
-    currentSelection.pixels.resize(currentSelection.width * currentSelection.height, Pixel(0, 0, 0, 0));
+    currentSelection.pixels.resize(currentSelection.width * currentSelection.height, pelpaint::Pixel(0, 0, 0, 0));
 
     // Copy pixels inside polygon
     for (int y = y1; y <= y2; ++y) {
@@ -1973,9 +2103,9 @@ void PixelPaintView::HandleCanvasInput()
             isLineMode = true;
         } else if (currentTool == DrawTool::BucketFill) {
             if (IsValidCoord(pixelX, pixelY)) {
-                Pixel fillCol = currentColor;
+                pelpaint::Pixel fillCol = currentColor;
                 if (bucketEraseToAlpha) {
-                    fillCol = Pixel(0, 0, 0, 0);
+                    fillCol = pelpaint::Pixel(0, 0, 0, 0);
                 }
                 if (bucketThreshold > 0.0f) {
                     FloodFillWithThreshold(pixelX, pixelY, fillCol, bucketThreshold);
@@ -1993,7 +2123,7 @@ void PixelPaintView::HandleCanvasInput()
 
     if (isDrawing && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if (currentTool == DrawTool::Pencil || currentTool == DrawTool::Eraser) {
-            Pixel drawColor = (currentTool == DrawTool::Eraser) ? Pixel(0, 0, 0, 0) : currentColor;
+            pelpaint::Pixel drawColor = (currentTool == DrawTool::Eraser) ? pelpaint::Pixel(0, 0, 0, 0) : currentColor;
 
             // Draw line from last point to current point for smooth strokes
             DrawLineBresenham(
@@ -2017,7 +2147,7 @@ void PixelPaintView::HandleCanvasInput()
                         int sourcePixelY = srcY + dy;
 
                         if (IsValidCoord(sourcePixelX, sourcePixelY)) {
-                            Pixel sourcePixel = GetPixel(sourcePixelX, sourcePixelY);
+                            pelpaint::Pixel sourcePixel = GetPixel(sourcePixelX, sourcePixelY);
                             PutPixel(pixelX + dx, pixelY + dy, sourcePixel);
                         }
                     }
@@ -2032,7 +2162,7 @@ void PixelPaintView::HandleCanvasInput()
 
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         if (currentTool == DrawTool::Line && isLineMode) {
-            Pixel drawColor = currentColor;
+            pelpaint::Pixel drawColor = currentColor;
             DrawLineBresenham(
                 static_cast<int>(lastDrawPoint.x),
                 static_cast<int>(lastDrawPoint.y),
@@ -2141,7 +2271,7 @@ void PixelPaintView::DrawColorPicker()
     }
 }
 
-void PixelPaintView::ApplyDithering(DitheringType type, const std::vector<Pixel>& palette)
+void PixelPaintView::ApplyDithering(DitheringType type, const std::vector<pelpaint::Pixel>& palette)
 {
     switch (type) {
         case DitheringType::Atkinson:
@@ -2254,10 +2384,10 @@ void PixelPaintView::DrawBrushSettings()
             brushSettings.size = std::max(1.0f, static_cast<float>(std::atof(sizeBuffer)));
         }
     } else {
-        ImGui::SliderFloat("Size##slider", &brushSettings.size, 1.0f, 100.0f);
+        AddSliderFloat("Size##slider", 1.0f, 100.0f, 1.0f, &brushSettings.size);
     }
 
-    ImGui::SliderFloat("Opacity##brush", &brushSettings.opacity, 0.0f, 1.0f);
+    AddSliderFloat("Opacity##brush", 0.0f, 1.0f, 0.01f, &brushSettings.opacity);
     ImGui::Checkbox("Antialiased", &brushSettings.antialiased);
 
     if (currentTool == DrawTool::Eraser) {
@@ -2276,7 +2406,7 @@ void PixelPaintView::DrawBrushSettings()
             ImGui::TextDisabled("Current color ignored (filling with 0 alpha)");
         }
 
-        ImGui::SliderFloat("Threshold##bucket", &bucketThreshold, 0.0f, 255.0f);
+        AddSliderFloat("Threshold##bucket", 0.0f, 255.0f, 1.0f, &bucketThreshold);
     }
 }
 
@@ -2534,7 +2664,7 @@ void PixelPaintView::DrawToolTab()
 
     // View section
     if (ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderFloat("Zoom##zoom", &canvasScale, 0.1f, 20.0f, "%.1fx");
+        AddSliderFloat("Zoom##zoom", 0.1f, 20.0f, 0.1f, &canvasScale);
         ImGui::Separator();
 
         ImGui::Text("Grid Mode:");
@@ -2545,7 +2675,7 @@ void PixelPaintView::DrawToolTab()
         if (ImGui::RadioButton("Cross", &mode, 3)) gridMode = GridMode::Crosses;
 
         if (gridMode != GridMode::None) {
-            ImGui::SliderInt("Grid Size", &gridSize, 2, 64);
+            AddSlider("Grid Size", 2, 64, 1, &gridSize);
             ImGui::Checkbox("Show Center", &showGridCenter);
             ImGui::SameLine();
             ImGui::Checkbox("Golden Ratio", &showGridGoldenRatio);
@@ -2593,9 +2723,9 @@ void PixelPaintView::DrawToolTab()
             }
             ImGui::Separator();
             ImGui::Text("Quick:");
-            if (ImGui::Button("Black##srbg",  ImVec2(-1, 0))) { shapeRedrawBgColor = Pixel(0,   0,   0,   255); ImGui::CloseCurrentPopup(); }
-            if (ImGui::Button("White##srbg",  ImVec2(-1, 0))) { shapeRedrawBgColor = Pixel(255, 255, 255, 255); ImGui::CloseCurrentPopup(); }
-            if (ImGui::Button("Pink##srbg",   ImVec2(-1, 0))) { shapeRedrawBgColor = Pixel(255, 0,   255, 255); ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Black##srbg",  ImVec2(-1, 0))) { shapeRedrawBgColor = pelpaint::Pixel(0,   0,   0,   255); ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("White##srbg",  ImVec2(-1, 0))) { shapeRedrawBgColor = pelpaint::Pixel(255, 255, 255, 255); ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Pink##srbg",   ImVec2(-1, 0))) { shapeRedrawBgColor = pelpaint::Pixel(255, 0,   255, 255); ImGui::CloseCurrentPopup(); }
             ImGui::EndPopup();
         }
 
@@ -2619,7 +2749,7 @@ void PixelPaintView::DrawToolTab()
         }
 
         ImGui::Spacing();
-        ImGui::SliderInt("Shape Size##sr", &shapeRedrawSize, 1, 32, "%d px");
+        AddSlider("Shape Size##sr", 1, 32, 1, &shapeRedrawSize);
         ImGui::Checkbox("Auto-Shade##sr", &shapeRedrawAutoShade);
         ImGui::SetItemTooltip("Automatically shade edges based on background brightness");
 
@@ -2707,13 +2837,13 @@ void PixelPaintView::DrawFilterTab()
         if (selectedDitheringMethod == 1) {
             ImGui::Checkbox("Grayscale to Mono##dm_at", &atkinsonGrayscaleToMono);
             ImGui::SetItemTooltip("Convert to grayscale before Atkinson dithering");
-            ImGui::SliderInt("Matrix Distance##at", &atkinsonMatrixDistance, 1, 10, "%d");
+            AddSlider("Matrix Distance##at", 1, 10, 1, &atkinsonMatrixDistance);
             ImGui::SetItemTooltip("Error diffusion spread distance");
         }
         if (selectedDitheringMethod == 2) {
             ImGui::Checkbox("Grayscale to Mono##dm_st", &stuckiGrayscaleToMono);
             ImGui::SetItemTooltip("Convert to grayscale before Stucki dithering");
-            ImGui::SliderInt("Matrix Distance##st", &stuckiMatrixDistance, 1, 10, "%d");
+            AddSlider("Matrix Distance##st", 1, 10, 1, &stuckiMatrixDistance);
             ImGui::SetItemTooltip("Error diffusion spread distance");
         }
 
@@ -2748,7 +2878,7 @@ void PixelPaintView::DrawFilterTab()
     // Pixelify
     // ----------------------------------------------------------------
     if (ImGui::CollapsingHeader("Pixelify", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::SliderInt("Pixel Size##pixelify", &pixelifySize, 1, 32, "%d px");
+        AddSlider("pelpaint::Pixel Size##pixelify", 1, 32, 1, &pixelifySize);
         ImGui::Checkbox("Apply Palette##pixelify", &pixelifyUsePalette);
         ImGui::SetItemTooltip("Quantize averaged block color to the current palette");
         ImGui::Spacing();
@@ -2782,9 +2912,9 @@ void PixelPaintView::DrawFilterTab()
 
         ImGui::Spacing();
 
-        ImGui::SliderInt("Block Size##srf",  &shapeRedrawFilterBlockSize, 2, 64, "%d px");
+        AddSlider("Block Size##srf", 2, 64, 1, &shapeRedrawFilterBlockSize);
         ImGui::SetItemTooltip("Size of each sampled block in pixels");
-        ImGui::SliderInt("Padding##srf",     &shapeRedrawFilterPadding,   0, 16, "%d px");
+        AddSlider("Padding##srf", 0, 16, 1, &shapeRedrawFilterPadding);
         ImGui::SetItemTooltip("Gap between shapes");
 
         ImGui::Checkbox("Use Palette##srf", &shapeRedrawFilterUsePalette);
@@ -2859,8 +2989,27 @@ void PixelPaintView::DrawFilesTab()
     ImGui::Spacing();
 
 #if TARGET_OS_IOS || TARGET_OS_TV
+    auto saveCompositeImage = [&](const std::string& filename, bool asPng) -> bool {
+        std::vector<pelpaint::Pixel> composite;
+        CompositeLayers(composite);
+
+        ImageView view;
+        view.data = reinterpret_cast<const std::uint8_t*>(composite.data());
+        view.width = static_cast<std::uint32_t>(canvasWidth);
+        view.height = static_cast<std::uint32_t>(canvasHeight);
+        view.stride = view.width * 4;
+        view.channels = 4;
+
+        return asPng
+            ? ImageExporter::SaveToPNG(filename, view)
+            : ImageExporter::SaveToTGA(filename, view);
+    };
+
+    if (ImGui::Button("Share PNG", ImVec2(-1, 0))) {
+        saveCompositeImage(currentFilename + ".png", true);
+    }
     if (ImGui::Button("Share TGA", ImVec2(-1, 0))) {
-        SaveToTGA(currentFilename + ".tga");
+        saveCompositeImage(currentFilename + ".tga", false);
     }
     if (ImGui::Button("Share Binary", ImVec2(-1, 0))) {
         SaveBinary(currentFilename + ".pxl");
@@ -2881,12 +3030,33 @@ void PixelPaintView::DrawFilesTab()
     if (ImGui::Button("Save PNG", ImVec2(-1, 0))) {
         ImGuiFileDialog::Instance()->OpenDialog("SavePNGDialog", "Save PNG", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
     }
-    if (ImGui::Button("Save SVG Pixel", ImVec2(-1, 0))) {
-        ImGuiFileDialog::Instance()->OpenDialog("SaveSVGPixelDialog", "Save SVG Pixel", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    if (ImGui::Button("Save SVG pelpaint::Pixel", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SaveSVGPixelDialog", "Save SVG pelpaint::Pixel", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
     }
     if (ImGui::Button("Save SVG Vector", ImVec2(-1, 0))) {
         ImGuiFileDialog::Instance()->OpenDialog("SaveSVGVectorDialog", "Save SVG Vector", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
     }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("Depth Map Export");
+    AddSlider("Depth Map Grid Size", 1, 128, 1, &depthMapGridSize);
+    depthMapGridSize = std::max(1, depthMapGridSize);
+    if (ImGui::Button("Export Depth Map", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SaveDepthMapDialog", "Save Depth Map", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("Mesh Export");
+    const char* meshModes[] = { "Solid", "Wireframe", "LoPoly", "PixelPerfect" };
+    ImGui::Combo("Mesh Type", &meshExportMode, meshModes, static_cast<int>(sizeof(meshModes) / sizeof(meshModes[0])));
+    AddSlider("Mesh Grid Size", 1, 128, 1, &meshExportGridSize);
+    meshExportGridSize = std::max(1, meshExportGridSize);
+    if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
+        ImGuiFileDialog::Instance()->OpenDialog("SaveMeshDialog", "Save Mesh", ".ply", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+    }
+
     if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
         ImGuiFileDialog::Instance()->OpenDialog("LoadImageDialog", "Load Image", ".tga,.png,.jpg,.jpeg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal);
     }
@@ -2900,14 +3070,14 @@ void PixelPaintView::DrawFilesTab()
         ImGui::Checkbox("Enable Auto-Pixelify##onload", &autoPixelifyOnLoad);
         ImGui::SetItemTooltip("Automatically pixelify large images when loading to prevent memory issues");
 
-        ImGui::SliderInt("Size Threshold##pixelify", &autoPixelifyThreshold, 256, 2048, "%d pixels");
+        AddSlider("Size Threshold##pixelify", 256, 2048, 1, &autoPixelifyThreshold);
         ImGui::SetItemTooltip("Images wider than this threshold will trigger auto-pixelify\nSuggested: 800-1200 pixels");
 
         ImGui::Spacing();
 
         ImGui::TextWrapped("Current Pixelify Size: %d", pixelifySize);
         ImGui::TextWrapped("If enabled, images larger than %d pixels will be automatically pixelified with calculated block size to prevent crashes.", autoPixelifyThreshold);
-        ImGui::TextWrapped("Pixel size is calculated based on image dimensions. A palette is automatically selected if none is chosen.");
+        ImGui::TextWrapped("pelpaint::Pixel size is calculated based on image dimensions. A palette is automatically selected if none is chosen.");
     }
 #endif
 }
@@ -2916,7 +3086,7 @@ void PixelPaintView::DrawFilesTab()
 // =================================
 // Key optimizations applied:
 //
-// 1. SPRAY TOOL - Batched Pixel Operations
+// 1. SPRAY TOOL - Batched pelpaint::Pixel Operations
 //    Problem: Called PutPixel() for EACH dot, causing 100s of compositing operations
 //    Solution: Write directly to pixelData[], composite ONCE at end
 //    Result: ~100x faster spray performance
@@ -2943,118 +3113,15 @@ void PixelPaintView::DrawFilesTab()
 // LAYERS TAB - Layer stack visualization and management with tabs
 void PixelPaintView::DrawLayersTab()
 {
-    ImGui::Text("Layer Stack (%zu total)", layers.size());
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    // Layer management buttons
-    if (ImGui::Button("Add Layer##new", ImVec2(-1, 0))) {
-        AddLayer("");
-    }
-    ImGui::Spacing();
-
-    // Layer stack visualization (rendered from bottom to top, matching visual order)
-    ImGui::Text("Layers (Bottom to Top):");
-    ImGui::Separator();
-
-    if (ImGui::BeginListBox("##LayerStack", ImVec2(-1, 200))) {
-        for (int i = 0; i < static_cast<int>(layers.size()); ++i) {
-            Layer& layer = layers[i];
-            bool isSelected = (i == activeLayerIndex);
-
-            // Build layer label with visibility indicator and z-index
-            std::string layerLabel =
-                (layer.visible ? "[V] " : "[ ] ") +
-                layer.name +
-                " (z:" + std::to_string(layer.zIndex) + ")";
-
-            ImGui::PushID(i);
-
-            // Selectable layer entry
-            if (ImGui::Selectable(layerLabel.c_str(), isSelected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                activeLayerIndex = i;
-                RenderLayerToCanvas();
-
-                // Double-click to rename
-                if (ImGui::IsMouseDoubleClicked(0)) {
-                    // TODO: Implement inline rename (show text input)
-                }
-            }
-
-            // Context menu for layer operations
-            if (ImGui::BeginPopupContextItem(("LayerContextMenu##" + std::to_string(i)).c_str())) {
-                if (ImGui::MenuItem("Visibility", nullptr, &layer.visible)) {
-                    RenderLayerToCanvas();
-                }
-                if (ImGui::MenuItem("Lock", nullptr, &layer.locked)) {
-                    // Locked prevents editing on this layer
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Duplicate##layer")) {
-                    Layer newLayer = layer;
-                    newLayer.name += " copy";
-                    newLayer.zIndex = nextLayerId++;
-                    layers.push_back(newLayer);
-                    activeLayerIndex = layers.size() - 1;
-                    RenderLayerToCanvas();
-                }
-                if (ImGui::MenuItem("Delete##layer") && layers.size() > 1) {
-                    RemoveLayer(i);
-                    RenderLayerToCanvas();
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Merge Down##layer") && i > 0) {
-                    // TODO: Implement layer merging
-                }
-                ImGui::EndPopup();
-            }
-
-            // Drag to reorder (simple approach - show up/down buttons)
-            ImGui::SameLine();
-            ImGui::PushItemWidth(60);
-            if (i > 0 && ImGui::Button("^##up", ImVec2(25, 0))) {
-                ReorderLayers(i, i - 1);
-                RenderLayerToCanvas();
-            }
-            ImGui::SameLine();
-            if (i < static_cast<int>(layers.size()) - 1 && ImGui::Button("v##down", ImVec2(25, 0))) {
-                ReorderLayers(i, i + 1);
-                RenderLayerToCanvas();
-            }
-            ImGui::PopItemWidth();
-            ImGui::PopID();
-        }
-        ImGui::EndListBox();
-    }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-
-    // Active layer properties panel
-    if (Layer* activeLayer = GetActiveLayer()) {
-        ImGui::Text("Active Layer: %s", activeLayer->name.c_str());
-        ImGui::Spacing();
-
-        if (ImGui::CollapsingHeader("Layer Properties", ImGuiTreeNodeFlags_DefaultOpen)) {
-            // Opacity slider
-            ImGui::SliderFloat("Opacity", &activeLayer->opacity, 0.0f, 1.0f, "%.2f");
-
-            // Blend mode selector (basic blend modes)
-            const char* blendModes[] = { "Normal", "Multiply", "Screen", "Overlay" };
-            ImGui::Combo("Blend Mode", &activeLayer->blendMode, blendModes, IM_ARRAYSIZE(blendModes));
-
-            // Tint color
-            ImVec4 tintColor(activeLayer->blendColor.x, activeLayer->blendColor.y,
-                            activeLayer->blendColor.z, activeLayer->blendColor.w);
-            if (ImGui::ColorEdit4("Tint Color", &tintColor.x)) {
-                activeLayer->blendColor = tintColor;
-                RenderLayerToCanvas();
-            }
-
-            // Lock toggle
-            ImGui::Checkbox("Lock Layer", &activeLayer->locked);
-        }
-    }
+    pelpaint::ui::LayerPanel(
+        layers,
+        activeLayerIndex,
+        nextLayerId,
+        [&](const std::string& name) { AddLayer(name); },
+        [&](int index) { RemoveLayer(index); },
+        [&](int from, int to) { ReorderLayers(from, to); },
+        [&]() { RenderLayerToCanvas(); }
+    );
 }
 
 
@@ -3144,16 +3211,40 @@ void PixelPaintView::Draw(std::string_view label)
     // File dialogs
     ImVec2 dialogSize = ImVec2(800, 600);
 
+    auto saveCompositeImage = [&](const std::string& filename, bool asPng) -> bool {
+        std::vector<pelpaint::Pixel> composite;
+        CompositeLayers(composite);
+
+        ImageView view;
+        view.data = reinterpret_cast<const std::uint8_t*>(composite.data());
+        view.width = static_cast<std::uint32_t>(canvasWidth);
+        view.height = static_cast<std::uint32_t>(canvasHeight);
+        view.stride = view.width * 4;
+        view.channels = 4;
+
+        return asPng
+            ? ImageExporter::SaveToPNG(filename, view)
+            : ImageExporter::SaveToTGA(filename, view);
+    };
+
     if (ImGuiFileDialog::Instance()->Display("SaveTGADialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
-            SaveToTGA(ImGuiFileDialog::Instance()->GetFilePathName());
+            const std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+            if (saveCompositeImage(path, false)) {
+                fs::path p(path);
+                SaveLastDirectory(p.parent_path().string());
+            }
         }
         ImGuiFileDialog::Instance()->Close();
     }
 
     if (ImGuiFileDialog::Instance()->Display("SavePNGDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
-            SaveToPNG(ImGuiFileDialog::Instance()->GetFilePathName());
+            const std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+            if (saveCompositeImage(path, true)) {
+                fs::path p(path);
+                SaveLastDirectory(p.parent_path().string());
+            }
         }
         ImGuiFileDialog::Instance()->Close();
     }
@@ -3168,6 +3259,20 @@ void PixelPaintView::Draw(std::string_view label)
     if (ImGuiFileDialog::Instance()->Display("SaveSVGVectorDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             SaveToSVGVector(ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("SaveDepthMapDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            SaveDepthMap(ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("SaveMeshDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            SaveMesh(ImGuiFileDialog::Instance()->GetFilePathName());
         }
         ImGuiFileDialog::Instance()->Close();
     }
