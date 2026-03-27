@@ -340,7 +340,21 @@ private:
     float canvasScale = 1.0f;
     float userCanvasScale = 1.0f;
     bool fitCanvas = true;
-    ImVec2 scrollOffset = ImVec2(0, 0);
+
+    // Canvas pan state
+    ImVec2 panOffset        = ImVec2(0, 0);
+    bool   isPanning        = false;
+    bool   spaceHeld        = false;
+    bool   pinchActive      = false;
+    float  pinchStartDist   = 0.0f;
+    float  pinchStartScale  = 1.0f;
+    ImVec2 scrollOffset     = ImVec2(0, 0);
+
+    // Set by DrawCanvasView before calling HandleCanvasInput
+    // so that HandleCanvasInput knows whether the canvas hit area
+    // is hovered/active without re-querying the wrong last item.
+    bool   canvasHitHovered = false;
+    bool   canvasHitActive  = false;
 
     // Persistent ImGui control state: values are keyed by the control label
     // Note: slider state is now managed inside pelpaint::ui (Widgets.hpp static maps)
@@ -367,7 +381,7 @@ private:
 
     // Palette management
     std::vector<pelpaint::ColorPalette> availablePalettes;
-    int selectedPaletteIndex = 0;
+    int selectedPaletteIndex = 10; // DB32 is index 10 in GetAllPalettes()
     std::vector<pelpaint::Pixel> customPalette;
     bool paletteEnabled = true;
     bool ditheringPreserveAlpha = true;

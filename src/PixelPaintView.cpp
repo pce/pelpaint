@@ -67,6 +67,14 @@ PixelPaintView::PixelPaintView()
     , canvasSurface(static_cast<std::uint32_t>(canvasWidth), static_cast<std::uint32_t>(canvasHeight))
 {
     availablePalettes = pelpaint::palettes::GetAllPalettes();
+
+    // Default to DB32 (index 10) so a palette is always active at startup
+    selectedPaletteIndex = 10;
+    if (selectedPaletteIndex < static_cast<int>(availablePalettes.size())) {
+        customPalette = availablePalettes[selectedPaletteIndex].colors;
+        paletteEnabled = true;
+    }
+
     currentFilename = GetDefaultFilename("png");
     grayscaleToMono = false;
 
@@ -1915,15 +1923,20 @@ bool PixelPaintView::LoadBinary(const std::string& filename)
 // Utility functions
 ImVec2 PixelPaintView::ScreenToCanvas(const ImVec2& screenPos) const
 {
-    ImVec2 relPos = ImVec2(screenPos.x - canvasPos.x, screenPos.y - canvasPos.y);
-    return ImVec2(relPos.x / canvasScale + scrollOffset.x, relPos.y / canvasScale + scrollOffset.y);
+    // canvasPos already contains the pan offset — no extra scrollOffset needed.
+    return ImVec2(
+        (screenPos.x - canvasPos.x) / canvasScale,
+        (screenPos.y - canvasPos.y) / canvasScale
+    );
 }
 
-ImVec2 PixelPaintView::CanvasToScreen(const ImVec2& canvasPos) const
+ImVec2 PixelPaintView::CanvasToScreen(const ImVec2& canvasCoord) const
 {
+    // canvasPos is the screen-space origin of the canvas (top-left corner),
+    // already includes pan offset. Just multiply by scale and offset.
     return ImVec2(
-        this->canvasPos.x + (canvasPos.x - scrollOffset.x) * canvasScale,
-        this->canvasPos.y + (canvasPos.y - scrollOffset.y) * canvasScale
+        canvasPos.x + canvasCoord.x * canvasScale,
+        canvasPos.y + canvasCoord.y * canvasScale
     );
 }
 
@@ -2241,11 +2254,102 @@ void PixelPaintView::HandleCanvasInput()
     ImGuiIO& io = ImGui::GetIO();
     ImVec2 mousePos = io.MousePos;
 
+    // ---------------------------------------------------------------
+    // Space bar tracking (for Photoshop-style pan mode)
+    // ---------------------------------------------------------------
+    if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) spaceHeld = true;
+    if (ImGui::IsKeyReleased(ImGuiKey_Space))        spaceHeld = false;
+
+    // Use the hit-test results stored by DrawCanvasView
+    // (InvisibleButton was the last item rendered before this call)
+    const bool canvasHovered = canvasHitHovered;
+    const bool windowHovered = canvasHitActive || canvasHitHovered;
+
+    // Middle-mouse pan (always, regardless of space)
+    if (canvasHovered || isPanning) {
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && canvasHovered) {
+            isPanning = true;
+        }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+            isPanning = false;
+        }
+        if (isPanning && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f)) {
+            panOffset.x += io.MouseDelta.x;
+            panOffset.y += io.MouseDelta.y;
+            scrollOffset = panOffset; // keep legacy in sync
+        }
+
+        // Space+LMB pan
+        if (spaceHeld) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && canvasHovered) {
+                isPanning = true;
+            }
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                isPanning = false;
+                isDrawing = false;
+            }
+            if (isPanning && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f)) {
+                panOffset.x += io.MouseDelta.x;
+                panOffset.y += io.MouseDelta.y;
+                scrollOffset = panOffset;
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Zoom: scroll wheel (no modifier needed) zooms around mouse cursor
+    //        Ctrl+scroll also works for compatibility
+    // ---------------------------------------------------------------
+    if ((canvasHovered || windowHovered) && io.MouseWheel != 0.0f) {
+        // Mouse position in screen space, relative to canvas origin BEFORE zoom
+        const float zoomFactor  = (io.MouseWheel > 0.0f) ? 1.1f : (1.0f / 1.1f);
+        const float oldScale    = userCanvasScale;
+        const float newScale    = std::clamp(oldScale * zoomFactor, 0.05f, 40.0f);
+
+        // Zoom towards mouse: adjust panOffset so the pixel under the cursor stays fixed
+        // mousePos relative to the centered canvas origin
+        const ImVec2 regionMin  = ImGui::GetItemRectMin();
+        const ImVec2 regionSize = ImGui::GetItemRectSize();
+        const ImVec2 center     = ImVec2(regionMin.x + regionSize.x * 0.5f,
+                                         regionMin.y + regionSize.y * 0.5f);
+
+        // Vector from canvas center to mouse
+        const ImVec2 toMouse = ImVec2(mousePos.x - center.x - panOffset.x,
+                                      mousePos.y - center.y - panOffset.y);
+
+        // Adjust pan so the pixel under the cursor stays fixed
+        panOffset.x -= toMouse.x * (newScale / oldScale - 1.0f);
+        panOffset.y -= toMouse.y * (newScale / oldScale - 1.0f);
+        scrollOffset = panOffset;
+
+        userCanvasScale = newScale;
+        // Disable fitCanvas when user explicitly zooms
+        fitCanvas = false;
+        io.WantCaptureMouse = true; // prevent ImGui from handling this wheel event
+    }
+
+    // ---------------------------------------------------------------
+    // Pinch-to-zoom (two touches / trackpad pinch via SDL)
+    // ImGui exposes pinch as io.MouseWheelH + Ctrl on some backends,
+    // but the most reliable cross-platform way is to watch for
+    // io.KeyCtrl + mouseWheel which SDL already maps pinch to.
+    // ---------------------------------------------------------------
+    // (Already handled above via io.MouseWheel — SDL maps pinch to wheel+Ctrl)
+
+    // ---------------------------------------------------------------
+    // Drawing tools — only when NOT panning and canvas is hovered
+    // ---------------------------------------------------------------
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         isDrawing = false;
     }
 
-    if (!ImGui::IsItemHovered() || !ImGui::IsWindowHovered()) {
+    if (spaceHeld || isPanning) {
+        // In pan mode: don't draw
+        return;
+    }
+
+    if (!canvasHovered) {
         return;
     }
 
@@ -2296,14 +2400,12 @@ void PixelPaintView::HandleCanvasInput()
 
     if (isDrawing && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         if (currentTool == DrawTool::Pencil || currentTool == DrawTool::Eraser) {
-            pelpaint::Pixel drawColor = (currentTool == DrawTool::Eraser) ? pelpaint::Pixel(0, 0, 0, 0) : currentColor;
-
-            // Draw line from last point to current point for smooth strokes
+            pelpaint::Pixel drawColor = (currentTool == DrawTool::Eraser)
+                ? pelpaint::Pixel(0, 0, 0, 0) : currentColor;
             DrawLineBresenham(
                 static_cast<int>(lastDrawPoint.x), static_cast<int>(lastDrawPoint.y),
                 pixelX, pixelY, drawColor, brushSettings.size
             );
-
             lastDrawPoint = canvasMousePos;
         } else if (currentTool == DrawTool::Spray) {
             DrawSpray(pixelX, pixelY, brushSettings.size, currentColor, 0.5f);
@@ -2311,14 +2413,12 @@ void PixelPaintView::HandleCanvasInput()
             ImVec2 sourceCanvasPos = cloneSourcePoint;
             int srcX = static_cast<int>(sourceCanvasPos.x);
             int srcY = static_cast<int>(sourceCanvasPos.y);
-
             int radius = static_cast<int>(brushSettings.size / 2.0f);
             for (int dy = -radius; dy <= radius; ++dy) {
                 for (int dx = -radius; dx <= radius; ++dx) {
                     if (dx * dx + dy * dy <= radius * radius) {
                         int sourcePixelX = srcX + dx;
                         int sourcePixelY = srcY + dy;
-
                         if (IsValidCoord(sourcePixelX, sourcePixelY)) {
                             pelpaint::Pixel sourcePixel = GetPixel(sourcePixelX, sourcePixelY);
                             PutPixel(pixelX + dx, pixelY + dy, sourcePixel);
@@ -2329,7 +2429,8 @@ void PixelPaintView::HandleCanvasInput()
         } else if (currentTool == DrawTool::ShapeRedraw) {
             DrawShapeRedrawShape(pixelX, pixelY, currentColor, shapeRedrawBgColor, shapeRedrawShape, shapeRedrawSize);
         } else if (currentTool == DrawTool::RectangleSelect || currentTool == DrawTool::CircleSelect) {
-            CopySelection(ImVec2(static_cast<float>(lastDrawPoint.x), static_cast<float>(lastDrawPoint.y)), canvasMousePos, currentTool == DrawTool::CircleSelect);
+            CopySelection(ImVec2(static_cast<float>(lastDrawPoint.x), static_cast<float>(lastDrawPoint.y)),
+                          canvasMousePos, currentTool == DrawTool::CircleSelect);
         }
     }
 
@@ -2337,35 +2438,14 @@ void PixelPaintView::HandleCanvasInput()
         if (currentTool == DrawTool::Line && isLineMode) {
             pelpaint::Pixel drawColor = currentColor;
             DrawLineBresenham(
-                static_cast<int>(lastDrawPoint.x),
-                static_cast<int>(lastDrawPoint.y),
-                pixelX,
-                pixelY,
-                drawColor,
-                brushSettings.size
+                static_cast<int>(lastDrawPoint.x), static_cast<int>(lastDrawPoint.y),
+                pixelX, pixelY, drawColor, brushSettings.size
             );
             isLineMode = false;
         } else if (currentTool == DrawTool::Fill && isLineMode) {
             isLineMode = false;
         }
         isDrawing = false;
-    }
-
-    // Zoom with mouse wheel (Ctrl + Scroll)
-    if (io.MouseWheel != 0.0f && io.KeyCtrl) {
-        ImVec2 mousePosOnCanvas = ScreenToCanvas(mousePos);
-        float oldScale = canvasScale;
-
-        canvasScale = std::clamp(canvasScale + io.MouseWheel * 0.1f * canvasScale, 0.1f, 20.0f);
-
-        scrollOffset.x += (mousePosOnCanvas.x * (oldScale - canvasScale));
-        scrollOffset.y += (mousePosOnCanvas.y * (oldScale - canvasScale));
-    }
-
-    // Pan with middle mouse button
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
-        scrollOffset.x += io.MouseDelta.x;
-        scrollOffset.y += io.MouseDelta.y;
     }
 }
 
@@ -2514,8 +2594,9 @@ void PixelPaintView::DrawPaletteSelector()
                 customPalette = availablePalettes[i].colors;
                 paletteEnabled = true;
             }
+            if (selected)
+                ImGui::SetItemDefaultFocus();
         }
-        selectedPaletteIndex = 0;
         ImGui::EndCombo();
     }
 
@@ -2617,38 +2698,90 @@ void PixelPaintView::DrawCanvasView()
 {
     UpdateTexture();
 
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float fitScaleX = (canvasWidth > 0) ? (avail.x / static_cast<float>(canvasWidth)) : 1.0f;
-    const float fitScaleY = (canvasHeight > 0) ? (avail.y / static_cast<float>(canvasHeight)) : 1.0f;
-    const float fitScale = std::min(fitScaleX, fitScaleY);
-    const float baseScale = fitCanvas ? fitScale : 1.0f;
-    const float effectiveScale = std::max(0.01f, baseScale * userCanvasScale);
+    const ImVec2 avail      = ImGui::GetContentRegionAvail();
+    const ImVec2 regionMin  = ImGui::GetCursorScreenPos();
 
-    ImVec2 imageSize = ImVec2(canvasWidth * effectiveScale, canvasHeight * effectiveScale);
+    // ---------------------------------------------------------------
+    // Scale: fitCanvas snaps to fill the area; user zoom multiplies on top.
+    // When fitCanvas is off, base scale is 1:1 pixel.
+    // ---------------------------------------------------------------
+    const float fitScaleX     = (canvasWidth  > 0) ? (avail.x / static_cast<float>(canvasWidth))  : 1.0f;
+    const float fitScaleY     = (canvasHeight > 0) ? (avail.y / static_cast<float>(canvasHeight)) : 1.0f;
+    const float fitScale      = std::min(fitScaleX, fitScaleY);
+    const float effectiveScale = std::max(0.01f, (fitCanvas ? fitScale : 1.0f) * userCanvasScale);
 
-    ImVec2 cursorStart = ImGui::GetCursorScreenPos();
-    ImVec2 offset = ImVec2((avail.x - imageSize.x) * 0.5f, (avail.y - imageSize.y) * 0.5f);
-    if (fitCanvas && userCanvasScale <= 1.0f) {
-        if (offset.x < 0.0f) offset.x = 0.0f;
-        if (offset.y < 0.0f) offset.y = 0.0f;
-    }
-
-    canvasPos = ImVec2(cursorStart.x + offset.x, cursorStart.y + offset.y);
-    ImGui::SetCursorScreenPos(canvasPos);
-
-    const float prevScale = canvasScale;
     canvasScale = effectiveScale;
 
-#if defined(USE_METAL_BACKEND)
-    if (metalTexture != nullptr) {
-        ImGui::Image(metalTexture, imageSize);
+    const ImVec2 imageSize = ImVec2(canvasWidth  * effectiveScale,
+                                    canvasHeight * effectiveScale);
+
+    // ---------------------------------------------------------------
+    // Center the canvas in the available area, then apply panOffset.
+    // Canvas is ALWAYS centered — panOffset shifts from that center.
+    // ---------------------------------------------------------------
+    const float centerX = regionMin.x + (avail.x - imageSize.x) * 0.5f;
+    const float centerY = regionMin.y + (avail.y - imageSize.y) * 0.5f;
+
+    canvasPos = ImVec2(centerX + panOffset.x,
+                       centerY + panOffset.y);
+
+    // ---------------------------------------------------------------
+    // Invisible full-area button captures mouse events for the whole
+    // canvas region (pan, zoom, draw) without ImGui scrolling it.
+    // ---------------------------------------------------------------
+    ImGui::SetCursorScreenPos(regionMin);
+    ImGui::InvisibleButton("##canvas_hit", avail,
+        ImGuiButtonFlags_MouseButtonLeft  |
+        ImGuiButtonFlags_MouseButtonRight |
+        ImGuiButtonFlags_MouseButtonMiddle);
+    // Store into members so HandleCanvasInput reads the correct hit-test
+    canvasHitActive  = ImGui::IsItemActive();
+    canvasHitHovered = ImGui::IsItemHovered();
+
+    // Draw the canvas texture via the draw list (bypasses ImGui layout)
+    ImDrawList* bgList = ImGui::GetWindowDrawList();
+
+    // Checkerboard background to show transparency
+    {
+        const float tileSize = std::max(4.0f, 8.0f * effectiveScale);
+        const ImU32 colA = IM_COL32(80,  80,  80,  255);
+        const ImU32 colB = IM_COL32(60,  60,  60,  255);
+        const ImVec2 p0  = canvasPos;
+        const ImVec2 p1  = ImVec2(canvasPos.x + imageSize.x, canvasPos.y + imageSize.y);
+        bgList->PushClipRect(p0, p1, true);
+        for (float ty = p0.y; ty < p1.y; ty += tileSize) {
+            for (float tx = p0.x; tx < p1.x; tx += tileSize) {
+                int col = (static_cast<int>((tx - p0.x) / tileSize) +
+                           static_cast<int>((ty - p0.y) / tileSize)) % 2;
+                bgList->AddRectFilled(
+                    ImVec2(tx, ty),
+                    ImVec2(std::min(tx + tileSize, p1.x),
+                           std::min(ty + tileSize, p1.y)),
+                    col == 0 ? colA : colB);
+            }
+        }
+        bgList->PopClipRect();
     }
+
+#if defined(USE_METAL_BACKEND)
+    if (metalTexture != nullptr)
+        bgList->AddImage(metalTexture,
+                         canvasPos,
+                         ImVec2(canvasPos.x + imageSize.x, canvasPos.y + imageSize.y));
 #else
-    ImGui::Image(reinterpret_cast<void*>(static_cast<intptr_t>(textureID)), imageSize, ImVec2(0, 1), ImVec2(1, 0));
+    bgList->AddImage(
+        reinterpret_cast<void*>(static_cast<intptr_t>(textureID)),
+        canvasPos,
+        ImVec2(canvasPos.x + imageSize.x, canvasPos.y + imageSize.y),
+        ImVec2(0, 1), ImVec2(1, 0));
 #endif
 
+    // HandleCanvasInput uses canvasHitHovered / canvasHitActive set above.
     HandleCanvasInput();
     DrawSelectionOverlay();
+
+    // Restore cursor to regionMin so the grid/overlay draw correctly
+    ImGui::SetCursorScreenPos(regionMin);
 
     if (gridMode != GridMode::None) {
         ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -2707,7 +2840,7 @@ void PixelPaintView::DrawCanvasView()
         }
     }
 
-    canvasScale = prevScale;
+
 }
 
 // Draw selection overlay
@@ -2848,29 +2981,59 @@ void PixelPaintView::DrawStatusBar()
 // RIGHT PANEL WITH TABS
 void PixelPaintView::DrawRightPanel()
 {
-    ImGui::BeginChild("RightPanel", ImVec2(rightPanelWidth, 0), true, ImGuiWindowFlags_NoScrollbar);
+    // Outer panel: fixed width, no scroll — tab bar always fully visible, never moves
+    ImGui::BeginChild("RightPanel", ImVec2(rightPanelWidth, 0), true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
 
-        if (ImGui::BeginTabBar("RightPanelTabs", ImGuiTabBarFlags_None)) {
+        // Tab bar with scrolling tabs (so tabs themselves can scroll if too many)
+        // but panel content never scrolls horizontally
+        if (ImGui::BeginTabBar("RightPanelTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+
+            // Content width is always clamped to the panel — never wider
+            // Vertical scroll is enabled per-tab; horizontal scroll is fully blocked
+            const float contentWidth = ImGui::GetContentRegionAvail().x;
+            const float contentHeight = ImGui::GetContentRegionAvail().y;
+
+            // Helper: vertical-scroll child, content clipped to panel width
+            // Flags: no horizontal scrollbar, auto vertical scrollbar
+            constexpr ImGuiWindowFlags kContentFlags =
+                ImGuiWindowFlags_NoScrollWithMouse; // outer panel handles mouse, inner scrolls via scrollbar only
+
             if (ImGui::BeginTabItem("Tool")) {
+                ImGui::BeginChild("TabScroll_Tool",
+                    ImVec2(contentWidth, contentHeight), false, kContentFlags);
                 DrawToolTab();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Color")) {
+                ImGui::BeginChild("TabScroll_Color",
+                    ImVec2(contentWidth, contentHeight), false, kContentFlags);
                 DrawColorTab();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Filter")) {
+                ImGui::BeginChild("TabScroll_Filter",
+                    ImVec2(contentWidth, contentHeight), false, kContentFlags);
                 DrawFilterTab();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Layers")) {
+                ImGui::BeginChild("TabScroll_Layers",
+                    ImVec2(contentWidth, contentHeight), false, kContentFlags);
                 DrawLayersTab();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Files")) {
+                ImGui::BeginChild("TabScroll_Files",
+                    ImVec2(contentWidth, contentHeight), false, kContentFlags);
                 DrawFilesTab();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -3592,24 +3755,29 @@ void PixelPaintView::Draw(std::string_view label)
         ImGui::SameLine();
     }
 
-    // CENTER CANVAS AREA - main drawing space
-    const float panelWidth = (!rightPanelCollapsed && !overlayPanels) ? (rightPanelWidth + 6.0f) : 0.0f;
-    float canvasAreaWidth = screenSize.x - leftToolbarWidth - panelWidth - 6.0f;
-    ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
+    // CENTER CANVAS AREA
+    // - Never scrolls (ImGui scroll fully disabled)
+    // - Canvas is always centered; pan/zoom handled inside DrawCanvasView
+    // - Footer is placed AFTER this block at a fixed screen position
+    const float panelWidth    = (!rightPanelCollapsed && !overlayPanels) ? (rightPanelWidth + 6.0f) : 0.0f;
+    const float canvasAreaWidth = screenSize.x - leftToolbarWidth - panelWidth - 6.0f;
+    ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, contentHeight), false,
+        ImGuiWindowFlags_NoScrollbar  |
+        ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoNav        |
+        ImGuiWindowFlags_NoMove);
     {
         DrawCanvasView();
 
-        // Canvas context menu
-        if (ImGui::BeginPopupContextWindow("CanvasContextMenu")) {
+        // Right-click context menu on canvas
+        if (ImGui::BeginPopupContextWindow("CanvasContextMenu",
+                ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
             if (IsRectSelectionActive()) {
-                if (ImGui::MenuItem("Crop to Selection")) {
-                    CropToSelection();
-                }
+                if (ImGui::MenuItem("Crop to Selection")) CropToSelection();
                 ImGui::Separator();
             }
-
-            if (ImGui::MenuItem("Undo", "Ctrl+Z")) { Undo(); }
-            if (ImGui::MenuItem("Redo", "Ctrl+Y")) { Redo(); }
+            if (ImGui::MenuItem("Undo", "Ctrl+Z")) Undo();
+            if (ImGui::MenuItem("Redo", "Ctrl+Y")) Redo();
             ImGui::EndPopup();
         }
     }
@@ -3744,9 +3912,11 @@ void PixelPaintView::Draw(std::string_view label)
     }
 #endif
 
-    // BOTTOM STATUS BAR (sticky)
-    ImGui::SetCursorPos(ImVec2(0, screenSize.y - statusBarHeight - bottomPadding));
-    ImGui::BeginChild("StatusBar", ImVec2(0, statusBarHeight), true, ImGuiWindowFlags_NoScrollbar);
+    // BOTTOM STATUS BAR — always sticky at the very bottom of the window.
+    // Use SetCursorScreenPos so it is independent of the layout above.
+    ImGui::SetCursorScreenPos(ImVec2(0.0f, screenSize.y - statusBarHeight - bottomPadding));
+    ImGui::BeginChild("StatusBar", ImVec2(screenSize.x, statusBarHeight), true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav);
     {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4, 3));
         DrawStatusBar();
