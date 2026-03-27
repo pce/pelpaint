@@ -10,7 +10,7 @@ if(APPLE OR IOS)
     enable_language(OBJC OBJCXX)
 endif()
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -27,6 +27,7 @@ endif()
 # Options
 option(ENABLE_WARNINGS "Enable to add warnings to a target." ON)
 option(ENABLE_WARNINGS_AS_ERRORS "Enable to treat warnings as errors." OFF)
+option(ENABLE_VULKAN_BACKEND "Enable Vulkan backend (non-Apple, non-web)." OFF)
 
 # Module path for custom cmake modules
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/)
@@ -166,6 +167,11 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
     set(APPLE_SOURCES
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.mm
+        src/export/MeshExporter.cpp
+        src/core/ImageSurface.cpp
+        src/core/Canvas.cpp
+        src/tools/DrawingAlgorithms.cpp
+        src/FileChooser.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
     )
 
@@ -180,6 +186,11 @@ else()
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.cpp
         src/PixelPaintView.cpp
+        src/export/MeshExporter.cpp
+        src/core/ImageSurface.cpp
+        src/core/Canvas.cpp
+        src/tools/DrawingAlgorithms.cpp
+        src/FileChooser.cpp
     )
 endif()
 
@@ -192,6 +203,10 @@ endif()
 
 if(PLATFORM_WEB)
     target_compile_definitions(${PROJECT_NAME} PRIVATE USE_WEBGL_BACKEND)
+elseif(ENABLE_VULKAN_BACKEND)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_VULKAN_BACKEND)
+elseif(NOT PLATFORM_MACOS AND NOT PLATFORM_IOS)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_OPENGL_BACKEND)
 endif()
 
 # Include directories

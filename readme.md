@@ -39,9 +39,14 @@ Immersive Color Palette: Choose from a vibrant array of colors to add depth and 
 
 ./scripts/dev.sh run-web
 
-### Notes
+## Notes
 
-This is a fun and educational project inspired by the 'Paint' Tutorial from dear ImGui by https://github.com/franneck94.
+This is a fun project inspired by the 'Paint' Tutorial from dear ImGui by https://github.com/franneck94.
 ASCII Logo generated with http://patorjk.com/software/taag/#p=display&h=1&v=0&f=Stronger%20Than%20All&t=PixelPaint%0A
 
     Built with <3 using SDL3, Dear ImGui, and modern C++
+
+## Export
+
+- SVG Export uses greedy rectangle merging algorithm
+- Mesh uses depth sampling, masking triangulation / extrusion

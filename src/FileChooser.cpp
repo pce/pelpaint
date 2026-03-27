@@ -61,7 +61,6 @@ void FileChooser::SetLastUsedDirectory(const std::string& path)
 void FileChooser::LoadPreferences()
 {
 #ifndef __EMSCRIPTEN__
-    try {
         auto configPath = fs::path(std::getenv("HOME")) / ".pelpaint" / "file_chooser.txt";
         if (fs::exists(configPath)) {
             std::ifstream file(configPath);
@@ -73,16 +72,12 @@ void FileChooser::LoadPreferences()
                 file.close();
             }
         }
-    } catch (...) {
-        // Ignore errors
-    }
 #endif
 }
 
 void FileChooser::SavePreferences()
 {
 #ifndef __EMSCRIPTEN__
-    try {
         auto configDir = fs::path(std::getenv("HOME")) / ".pelpaint";
         if (!fs::exists(configDir)) {
             fs::create_directories(configDir);
@@ -93,9 +88,6 @@ void FileChooser::SavePreferences()
             file << lastUsedDirectory << std::endl;
             file.close();
         }
-    } catch (...) {
-        // Ignore errors
-    }
 #endif
 }
 

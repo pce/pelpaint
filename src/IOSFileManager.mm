@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <objc/runtime.h>
 
 #include "IOSFileManager.h"
 
@@ -127,6 +128,8 @@ char* iOS_GetDocumentsPath(void) {
 // Document picker delegate
 @interface DocumentPickerDelegate : NSObject <UIDocumentPickerDelegate>
 @property (nonatomic, copy) void (^completionBlock)(const char*);
+@property (nonatomic, assign) void* context;
+@property (nonatomic, assign) iOS_FilePickerCallback callback;
 @end
 
 @implementation DocumentPickerDelegate
@@ -139,8 +142,11 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
         // Start accessing security-scoped resource
         BOOL didStartAccessing = [url startAccessingSecurityScopedResource];
 
+        const char *path = [[url path] UTF8String];
+        if (self.callback) {
+            self.callback(self.context, path);
+        }
         if (self.completionBlock) {
-            const char *path = [[url path] UTF8String];
             self.completionBlock(path);
         }
 
@@ -156,31 +162,20 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 @end
 
-// Global delegate instance (retained)
-static DocumentPickerDelegate *g_pickerDelegate = nil;
-
-// Present file picker
-bool iOS_OpenFilePicker(void (*callback)(const char* filepath)) {
+// Present file picker with context
+bool iOS_OpenFilePickerWithContext(void* context, iOS_FilePickerCallback callback) {
     if (!callback) {
         return false;
     }
 
     @autoreleasepool {
-        // Create delegate if needed
-        if (!g_pickerDelegate) {
-            g_pickerDelegate = [[DocumentPickerDelegate alloc] init];
-        }
+        DocumentPickerDelegate *delegate = [[DocumentPickerDelegate alloc] init];
+        delegate.context = context;
+        delegate.callback = callback;
 
-        // Set completion block
-        g_pickerDelegate.completionBlock = ^(const char *path) {
-            callback(path);
-        };
-
-        // Create document picker for images
         UIDocumentPickerViewController *picker;
 
         if (@available(iOS 14.0, *)) {
-            // iOS 14+ with UTType
             NSArray *contentTypes = @[
                 UTTypeImage,
                 UTTypePNG,
@@ -189,15 +184,16 @@ bool iOS_OpenFilePicker(void (*callback)(const char* filepath)) {
             picker = [[UIDocumentPickerViewController alloc]
                 initForOpeningContentTypes:contentTypes];
         } else {
-            // iOS 13 fallback
             NSArray *documentTypes = @[@"public.image", @"public.png", @"public.jpeg"];
             picker = [[UIDocumentPickerViewController alloc]
                 initWithDocumentTypes:documentTypes
                 inMode:UIDocumentPickerModeOpen];
         }
 
-        picker.delegate = g_pickerDelegate;
+        picker.delegate = delegate;
         picker.allowsMultipleSelection = NO;
+
+        objc_setAssociatedObject(picker, "pelpaint_doc_picker_delegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
         // For iPad, configure popover
         if (iOS_IsIPad()) {
@@ -214,7 +210,50 @@ bool iOS_OpenFilePicker(void (*callback)(const char* filepath)) {
             }
         }
 
-        // Present picker
+        // Present the picker
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIViewController *rootVC = GetRootViewController();
+            [rootVC presentViewController:picker animated:YES completion:nil];
+        });
+
+        return true;
+    }
+}
+
+// Present file picker (legacy callback signature)
+bool iOS_OpenFilePicker(void (*callback)(const char* filepath)) {
+    if (!callback) {
+        return false;
+    }
+
+    @autoreleasepool {
+        DocumentPickerDelegate *delegate = [[DocumentPickerDelegate alloc] init];
+        delegate.completionBlock = ^(const char *path) {
+            callback(path);
+        };
+
+        UIDocumentPickerViewController *picker;
+
+        if (@available(iOS 14.0, *)) {
+            NSArray *contentTypes = @[
+                UTTypeImage,
+                UTTypePNG,
+                UTTypeJPEG
+            ];
+            picker = [[UIDocumentPickerViewController alloc]
+                initForOpeningContentTypes:contentTypes];
+        } else {
+            NSArray *documentTypes = @[@"public.image", @"public.png", @"public.jpeg"];
+            picker = [[UIDocumentPickerViewController alloc]
+                initWithDocumentTypes:documentTypes
+                inMode:UIDocumentPickerModeOpen];
+        }
+
+        picker.delegate = delegate;
+        picker.allowsMultipleSelection = NO;
+
+        objc_setAssociatedObject(picker, "pelpaint_doc_picker_delegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
         dispatch_async(dispatch_get_main_queue(), ^{
             UIViewController *rootVC = GetRootViewController();
             [rootVC presentViewController:picker animated:YES completion:nil];
