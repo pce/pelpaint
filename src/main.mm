@@ -12,18 +12,22 @@
     #include "imgui_impl_metal.h"
     #import <Metal/Metal.h>
     #import <QuartzCore/CAMetalLayer.h>
-#else
+#elif defined(USE_WEBGL_BACKEND)
     #include "imgui_impl_sdl3.h"
     #include "imgui_impl_opengl3.h"
-    #if defined(__EMSCRIPTEN__)
-        #include <emscripten.h>
-        #include <emscripten/html5.h>
-    #endif
-    #if defined(IMGUI_IMPL_OPENGL_ES2)
-        #include <SDL3/SDL_opengles2.h>
-    #else
-        #include <SDL3/SDL_opengl.h>
-    #endif
+    #include <emscripten.h>
+    #include <emscripten/html5.h>
+    #include <SDL3/SDL_opengles2.h>
+#elif defined(USE_VULKAN_BACKEND)
+    #include "imgui_impl_sdl3.h"
+    #include "imgui_impl_vulkan.h"
+    #include <SDL3/SDL_vulkan.h>
+#elif defined(USE_OPENGL_BACKEND)
+    #include "imgui_impl_sdl3.h"
+    #include "imgui_impl_opengl3.h"
+    #include <SDL3/SDL_opengl.h>
+#else
+    #error "No rendering backend selected"
 #endif
 
 #define SDL_MAIN_USE_CALLBACKS
@@ -31,6 +35,8 @@
 #include <SDL3/SDL_main.h>
 
 #include "PixelPaintView.hpp"
+
+using pelpaint::PixelPaintView;
 
 constexpr auto WINDOW_WIDTH = std::uint32_t{1280};
 constexpr auto WINDOW_HEIGHT = std::uint32_t{720};

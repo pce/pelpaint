@@ -97,16 +97,16 @@ inline void SetupUnrealTheme() {
     colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.50f);
     colors[ImGuiCol_MenuBarBg] = ImVec4(0.13f, 0.13f, 0.13f, 1.00f);
 
-    // Style parameters - Unreal-like spacing
-    style.WindowPadding = ImVec2(8.0f, 8.0f);
-    style.FramePadding = ImVec2(5.0f, 4.0f);
-    style.CellPadding = ImVec2(4.0f, 3.0f);
-    style.ItemSpacing = ImVec2(8.0f, 5.0f);
-    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
+    // Style parameters
+    style.WindowPadding = ImVec2(12.0f, 12.0f);
+    style.FramePadding = ImVec2(7.0f, 6.0f);
+    style.CellPadding = ImVec2(6.0f, 4.0f);
+    style.ItemSpacing = ImVec2(10.0f, 8.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 6.0f);
     style.TouchExtraPadding = ImVec2(0.0f, 0.0f);
-    style.IndentSpacing = 20.0f;
-    style.ScrollbarSize = 15.0f;
-    style.GrabMinSize = 10.0f;
+    style.IndentSpacing = 22.0f;
+    style.ScrollbarSize = 16.0f;
+    style.GrabMinSize = 12.0f;
 
     // Borders and rounding - subtle Unreal style
     style.WindowBorderSize = 1.0f;

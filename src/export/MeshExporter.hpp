@@ -38,25 +38,25 @@ class MeshExporter {
 public:
     static bool SaveAsMesh(
         const std::string& filename,
-        const ImageView& view,
+        const pelpaint::ImageView& view,
         const pelpaint::ColorPalette& palette,
         const MeshExportOptions& options
     );
 
 
-    static bool BuildSolidMesh(const ImageView& view,
+    static bool BuildSolidMesh(const pelpaint::ImageView& view,
                                std::span<const float> depthMap,
                                std::uint32_t gridSize,
                                float depthScale,
                                MeshData& outMesh);
 
-    static bool BuildWireframeMesh(const ImageView& view,
+    static bool BuildWireframeMesh(const pelpaint::ImageView& view,
                                    std::span<const float> depthMap,
                                    std::uint32_t gridSize,
                                    float depthScale,
                                    MeshData& outMesh);
 
-    static bool BuildPixelPerfectMesh(const ImageView& view,
+    static bool BuildPixelPerfectMesh(const pelpaint::ImageView& view,
                                       std::span<const float> depthMap,
                                       std::uint32_t gridSize,
                                       float depthScale,

@@ -14,7 +14,7 @@
 namespace pelpaint::exporter {
     class DepthMapGenerator {
     public:
-    static bool BuildDepthMap(const ImageView& view,
+    static bool BuildDepthMap(const pelpaint::ImageView& view,
                                      std::uint32_t gridSize,
                                      std::vector<float>& outDepthMap)
     {

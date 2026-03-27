@@ -25,7 +25,7 @@ namespace pelpaint::exporter {
     };
 
     bool MeshExporter::SaveAsMesh(const std::string& filename,
-                                  const ImageView& view,
+                                  const pelpaint::ImageView& view,
                                   const pelpaint::ColorPalette& palette,
                                   const MeshExportOptions& options)
     {
@@ -191,7 +191,7 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    bool MeshExporter::BuildSolidMesh(const ImageView& view,
+    bool MeshExporter::BuildSolidMesh(const pelpaint::ImageView& view,
                                       std::span<const float> depthMap,
                                       std::uint32_t gridSize,
                                       float depthScale,
@@ -316,7 +316,7 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    bool MeshExporter::BuildWireframeMesh(const ImageView& view,
+    bool MeshExporter::BuildWireframeMesh(const pelpaint::ImageView& view,
                                           std::span<const float> depthMap,
                                           std::uint32_t gridSize,
                                           float depthScale,
@@ -418,7 +418,7 @@ namespace pelpaint::exporter {
         return static_cast<std::uint32_t>(mesh.vertices.size() - 1u);
     }
 
-    static bool BuildPixelCells(const ImageView& view,
+    static bool BuildPixelCells(const pelpaint::ImageView& view,
                                 std::span<const float> depthMap,
                                 std::uint32_t gridSize,
                                 std::vector<PixelCell>& outCells)
@@ -523,7 +523,7 @@ namespace pelpaint::exporter {
         mesh.indices.push_back(i3);
     }
 
-    bool MeshExporter::BuildPixelPerfectMesh(const ImageView& view,
+    bool MeshExporter::BuildPixelPerfectMesh(const pelpaint::ImageView& view,
                                              std::span<const float> depthMap,
                                              std::uint32_t gridSize,
                                              float depthScale,

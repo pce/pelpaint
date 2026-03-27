@@ -31,7 +31,7 @@ static inline float LumaFromRGBA(std::uint8_t r, std::uint8_t g, std::uint8_t b)
            (0.0722f * static_cast<float>(b));
 }
 
-static inline bool ReadPixelRGBA8(const ImageView& view,
+static inline bool ReadPixelRGBA8(const pelpaint::ImageView& view,
                                  std::uint32_t x,
                                  std::uint32_t y,
                                  std::uint8_t& r,

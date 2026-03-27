@@ -20,7 +20,7 @@ private:
     /**
      * Efficiently read a pelpaint::Pixel from an ImageView at a specific coordinate.
      */
-    static inline pelpaint::Pixel ReadPixel(const ImageView& view, std::uint32_t x, std::uint32_t y) noexcept {
+    static inline pelpaint::Pixel ReadPixel(const pelpaint::ImageView& view, std::uint32_t x, std::uint32_t y) noexcept {
         const std::uint8_t* p = view.data + (y * view.stride) + (x * view.channels);
         return pelpaint::Pixel(p[0], p[1], p[2], p[3]);
     }
@@ -31,7 +31,7 @@ public:
      * Uses ImageView for efficient, non-owning access to image data.
      * Optimized with std::uint8_t visited buffer for faster access in hot loops.
      */
-    static bool SaveToSVGOptimized(const std::string& filename, const ImageView& view) {
+    static bool SaveToSVGOptimized(const std::string& filename, const pelpaint::ImageView& view) {
         if (!view.valid() || view.channels != 4) return false;
 
         std::ofstream file(filename, std::ios::out | std::ios::trunc);
@@ -116,7 +116,7 @@ public:
      * Vector-style SVG using optimized merging and smoothed styling.
      * Includes slight rounding and overlap to prevent rendering artifacts.
      */
-    static bool SaveToSVGVector(const std::string& filename, const ImageView& view) {
+    static bool SaveToSVGVector(const std::string& filename, const pelpaint::ImageView& view) {
         if (!view.valid() || view.channels != 4) return false;
 
         std::ofstream file(filename, std::ios::out | std::ios::trunc);
@@ -174,7 +174,7 @@ public:
         return !file.fail();
     }
 
-    static bool SaveToPNG(const std::string& filename, const ImageView& view) {
+    static bool SaveToPNG(const std::string& filename, const pelpaint::ImageView& view) {
         if (!view.valid() || view.channels < 4) return false;
 
         return stbi_write_png(
@@ -187,7 +187,7 @@ public:
         ) != 0;
     }
 
-    static bool SaveToTGA(const std::string& filename, const ImageView& view) {
+    static bool SaveToTGA(const std::string& filename, const pelpaint::ImageView& view) {
         if (!view.valid() || view.channels < 4) return false;
 
         return stbi_write_tga(
@@ -199,7 +199,7 @@ public:
         ) != 0;
     }
 
-    static bool SaveDepthMap(const ImageView& view,
+    static bool SaveDepthMap(const pelpaint::ImageView& view,
                              std::uint32_t gridSize,
                              const std::string& filename)
     {

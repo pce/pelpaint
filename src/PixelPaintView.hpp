@@ -14,6 +14,7 @@
 #include <implot.h>
 
 #include "ColorPalettes.hpp"
+#include "core/ImageSurface.hpp"
 
 #if defined(USE_METAL_BACKEND)
     #ifdef __OBJC__
@@ -22,6 +23,8 @@
         typedef void* id;
     #endif
 #endif
+
+namespace pelpaint {
 
 namespace fs = std::filesystem;
 
@@ -194,12 +197,9 @@ public:
     bool IsValidPixel(int x, int y) const;
 
     // Persistent ImGui-backed controls:
-    // - `AddSlider` stores current integer value in `sliderValues` keyed by label.
     // - `AddCheckbox` stores current boolean state in `checkboxValues` keyed by label.
     // Callbacks are invoked when the value changes.
-    void AddSlider(const std::string& label, int min, int max, int step, const std::function<void(int)>& callback);
-    void AddSlider(const std::string& label, int min, int max, int step, int* value);
-    void AddSliderFloat(const std::string& label, float min, float max, float step, float* value);
+    // Note: Sliders are handled by pelpaint::ui::SliderIntStepStateful / SliderFloatStepStateful in ui/Widgets.hpp
     void AddCheckbox(const std::string& label, const std::function<void(bool)>& callback);
     void AddButton(const std::string& label, const std::function<void()>& callback);
 
@@ -219,6 +219,7 @@ private:
 
     // Core pixel buffer - the "real" image
     std::vector<pelpaint::Pixel> canvasData;
+    core::ImageSurface canvasSurface;
 
     // Layer management system
     std::vector<Layer> layers;                      // Stack of layers (index 0 = bottom)
@@ -245,10 +246,27 @@ private:
 #endif
     bool textureNeedsUpdate = true;
 
+    struct DirtyRect {
+        bool dirty = false;
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+    };
+
+    DirtyRect dirtyRect;
+    int textureWidth = 0;
+    int textureHeight = 0;
+
+    void MarkDirtyRect(int x, int y, int w, int h);
+    void MarkDirtyFull();
+    void ClearDirtyRect();
+
     // Texture management
     void InitializeTexture();
     void UpdateTexture();
     void DestroyTexture();
+    void SyncSurfaceFromCanvas();
 
     // Canvas operations
     void ResizeCanvas(int newWidth, int newHeight);
@@ -314,16 +332,18 @@ private:
     bool LoadBinary(const std::string& filename);
     void CropToSelection();
     bool IsRectSelectionActive() const;
+    static void IOSOpenFileCallback(void* context, const char* filepath);
 
     // UI State
     ImVec2 canvasPos;
     ImVec2 canvasSize;
     float canvasScale = 1.0f;
+    float userCanvasScale = 1.0f;
+    bool fitCanvas = true;
     ImVec2 scrollOffset = ImVec2(0, 0);
 
     // Persistent ImGui control state: values are keyed by the control label
-    std::unordered_map<std::string, int> sliderValues;
-    std::unordered_map<std::string, float> sliderFloatValues;
+    // Note: slider state is now managed inside pelpaint::ui (Widgets.hpp static maps)
     std::unordered_map<std::string, bool> checkboxValues;
 
     // Drawing state
@@ -364,6 +384,9 @@ private:
     bool showPixelifyPreview = true;
 
     // Export settings
+    int exportTypeIndex = 0;        // 0=Image, 1=SVG, 2=Depth Map, 3=Mesh
+    int imageExportFormat = 0;      // 0=PNG, 1=TGA, 2=JPEG
+    int meshExportFormat = 0;       // 0=PLY (placeholder for future formats)
     int depthMapGridSize = 4;
     int meshExportGridSize = 4;
     int meshExportMode = 0;
@@ -419,6 +442,8 @@ private:
     void PasteSelection(const ImVec2& pastePos);
     void BlurSelection(float radius);
     float ColorDistance(const pelpaint::Pixel& c1, const pelpaint::Pixel& c2) const;
+    bool IsPointInSelection(int x, int y) const;
+    void ClearSelection();
 
     // Polygon selection
     void AddPolygonPoint(const ImVec2& point);
@@ -447,6 +472,7 @@ private:
     bool showGridGoldenRatio = false;
 
     // UI Panel state
+    bool leftToolbarCollapsed = false;
     bool rightPanelCollapsed = false;
     float rightPanelWidth = 380.0f;
 
@@ -465,7 +491,9 @@ private:
     void DrawRightPanel();
     void DrawToolTab();
     void DrawColorTab();
-    void DrawFilterTab();   // renamed from DrawImageTab
+    void DrawFilterTab();
     void DrawFilesTab();
     void DrawLayersTab();
 };
+
+} // namespace pelpaint
