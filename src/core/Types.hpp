@@ -220,12 +220,5 @@ enum class RightPanelTab {
 };
 
 
-#ifdef IMGUI_VERSION
-// Only visible when imgui.h has already been included.
-[[nodiscard]] inline Point2f ToPoint2f(ImVec2 v) noexcept { return {v.x, v.y}; }
-[[nodiscard]] inline ImVec2  ToImVec2 (Point2f p) noexcept { return {p.x, p.y}; }
-[[nodiscard]] inline Color4f ToColor4f(ImVec4 v) noexcept { return {v.x, v.y, v.z, v.w}; }
-[[nodiscard]] inline ImVec4  ToImVec4 (Color4f c) noexcept { return {c.r, c.g, c.b, c.a}; }
-#endif
 
 } // namespace pelpaint

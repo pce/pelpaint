@@ -12,9 +12,9 @@ class FileChooser
 public:
     static FileChooser& Instance();
 
-    // Open a file for reading
+    // Open a file for reading.
     // filters: ".png,.jpg,.tga" format
-    // startPath: initial directory (ignored on WASM)
+    // startPath: initial directory (ignored on WASM/iOS)
     void OpenFileDialog(
         const std::string& title,
         const std::string& filters,
@@ -22,9 +22,11 @@ public:
         FileChooserCallback callback
     );
 
-    // Save a file
-    // suggestedFilename: default filename
+    // Save a file.
+    // suggestedFilename: default filename shown in the dialog
     // filters: ".png,.tga" format
+    // On WASM: callback receives "/tmp/<suggestedFilename>"; caller MUST call
+    //   TriggerWASMDownload(path) after writing data to that MEMFS path.
     void SaveFileDialog(
         const std::string& title,
         const std::string& filters,
@@ -33,17 +35,25 @@ public:
         FileChooserCallback callback
     );
 
-    // Get the last used directory
+    // ── WASM download helper ──────────────────────────────────────────────────
+    // Reads a file from Emscripten MEMFS and pushes it as a browser download.
+    // No-op on all other platforms.
+    // Call this after writing image data to the path returned by SaveFileDialog.
+    void TriggerWASMDownload(
+        const std::string& memfsPath,
+        const std::string& downloadName = ""   // defaults to filename part of memfsPath
+    );
+
+    // ── Preferences ──────────────────────────────────────────────────────────
     std::string GetLastUsedDirectory() const;
+    void        SetLastUsedDirectory(const std::string& path);
+    void        SavePreferences();
+    void        LoadPreferences();
 
-    // Set the last used directory
-    void SetLastUsedDirectory(const std::string& path);
-
-    // Save preferences to disk
-    void SavePreferences();
-
-    // Load preferences from disk
-    void LoadPreferences();
+    // ── ImGuiFileDialog frame pump (Desktop/Win/Linux only) ──────────────────
+    // Call once per frame inside ImGui::NewFrame() … ImGui::Render() scope
+    // to display any pending ImGuiFileDialog modals.  No-op on macOS/iOS/WASM.
+    void RenderPendingDialogs();
 
 private:
     FileChooser();
@@ -84,7 +94,7 @@ private:
     );
 #endif
 
-    // For global callback access
+    // Global callback access from C extern
     friend void file_chooser_on_file_selected(const char* filename);
     static FileChooser* g_Instance;
 };

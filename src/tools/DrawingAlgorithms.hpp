@@ -95,22 +95,20 @@ void DrawPenStroke(DrawCtx& ctx,
                    float tiltX,
                    float tiltY);
 
-// ---------------------------------------------------------------------------
 // BrushMode::PixelBrush  — watercolor / wet-ink scatter
 //
-//   • A tight solid-core circle is always drawn at (cx, cy).
-//   • N radial "rays" are march-scattered outward from the core; each ray
+//   - A tight solid-core circle is always drawn at (cx, cy).
+//   - N radial "rays" are march-scattered outward from the core; each ray
 //     places pixels with probability that decays with distance so the result
 //     looks like ink bleeding into wet paper.
-//   • accumulation grows while the pen is held (call-site increments it each
+//   - accumulation grows while the pen is held (call-site increments it each
 //     frame) — the spread radius extends with accumulation, simulating ink
 //     absorbing into the paper over time.
-//   • Pixels near the outer fringe receive a slight wet-edge darkening
+//   - Pixels near the outer fringe receive a slight wet-edge darkening
 //     (pigment concentrates at the drying edge in real watercolour).
 //
 //   pressure      0..1  — core opacity and maximum scatter radius.
 //   accumulation  0..N  — dwell factor; reset to 0 at stroke start.
-
 void DrawPixelBrush(DrawCtx& ctx,
                     int cx, int cy,
                     float radius,

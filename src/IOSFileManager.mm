@@ -136,23 +136,44 @@ char* iOS_GetDocumentsPath(void) {
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller
 didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    if (urls.count > 0) {
-        NSURL *url = urls[0];
+    if (urls.count == 0) return;
 
-        // Start accessing security-scoped resource
-        BOOL didStartAccessing = [url startAccessingSecurityScopedResource];
+    NSURL *url = urls[0];
 
-        const char *path = [[url path] UTF8String];
-        if (self.callback) {
-            self.callback(self.context, path);
-        }
-        if (self.completionBlock) {
-            self.completionBlock(path);
-        }
+    // Must access security-scoped resource while we copy it to our sandbox.
+    BOOL didStartAccessing = [url startAccessingSecurityScopedResource];
 
-        if (didStartAccessing) {
-            [url stopAccessingSecurityScopedResource];
-        }
+    // Copy the file to /tmp so C++ can access it freely after we release scope.
+    NSString *filename = [url lastPathComponent];
+    NSString *tempPath = [NSTemporaryDirectory()
+                          stringByAppendingPathComponent:filename];
+    NSURL *tempURL = [NSURL fileURLWithPath:tempPath];
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtURL:tempURL error:nil]; // remove stale copy if any
+
+    NSError *copyError = nil;
+    BOOL copied = [fm copyItemAtURL:url toURL:tempURL error:&copyError];
+
+    // Release security scope — must happen before any potentially blocking call
+    if (didStartAccessing) {
+        [url stopAccessingSecurityScopedResource];
+    }
+
+    const char *deliveredPath = nil;
+    if (copied) {
+        deliveredPath = [tempPath UTF8String];
+    } else {
+        NSLog(@"[IOSFileManager] Failed to copy picked file: %@", copyError);
+        // Fallback: try the original path (may or may not be readable)
+        deliveredPath = [[url path] UTF8String];
+    }
+
+    if (self.callback) {
+        self.callback(self.context, deliveredPath);
+    }
+    if (self.completionBlock) {
+        self.completionBlock(deliveredPath);
     }
 }
 

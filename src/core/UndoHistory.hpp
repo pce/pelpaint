@@ -31,7 +31,6 @@ public:
     [[nodiscard]] std::size_t UndoCount()  const noexcept { return undoStack_.size(); }
     [[nodiscard]] std::size_t RedoCount()  const noexcept { return redoStack_.empty() ? 0 : redoStack_.size(); }
 
-    // ---- Mutations -------------------------------------------------------
 
     // Push a new snapshot. Clears the redo stack.
     // Takes snapshot by value — callers should std::move when possible.

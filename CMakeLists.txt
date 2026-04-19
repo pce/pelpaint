@@ -152,10 +152,15 @@ add_library(implot_lib STATIC ${IMPLOT_SOURCES})
 target_include_directories(implot_lib PUBLIC ${IMPLOT_DIR})
 target_link_libraries(implot_lib PUBLIC imgui_lib)
 
-# ImGuiFileDialog sources
-set(IMGUI_FILE_DIALOG_SOURCES
-    src/ImGuiFileDialog.cpp
-)
+# ImGuiFileDialog sources (only needed on Windows / Linux desktop)
+# macOS uses NSOpenPanel, iOS uses UIDocumentPickerViewController, WASM uses <input type=file>
+if(NOT PLATFORM_MACOS AND NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
+    set(IMGUI_FILE_DIALOG_SOURCES
+        src/ImGuiFileDialog.cpp
+    )
+else()
+    set(IMGUI_FILE_DIALOG_SOURCES "")
+endif()
 
 # Main executable
 if(PLATFORM_MACOS OR PLATFORM_IOS)
@@ -178,6 +183,11 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
     # Add iOS file manager for iOS/iPadOS builds
     if(PLATFORM_IOS)
         list(APPEND APPLE_SOURCES src/IOSFileManager.mm)
+    endif()
+
+    # Add native macOS file dialogs (NSOpenPanel / NSSavePanel)
+    if(PLATFORM_MACOS)
+        list(APPEND APPLE_SOURCES src/FileChooser_macOS.mm)
     endif()
 
     add_executable(${PROJECT_NAME} ${APPLE_SOURCES})
@@ -258,6 +268,12 @@ elseif(PLATFORM_WEB)
         "-sASSERTIONS=1"
         "-sFULL_ES3=1"
         "-sUSE_WEBGL2=1"
+        # Filesystem support (needed for /tmp MEMFS read/write in FileChooser)
+        "-sFORCE_FILESYSTEM=1"
+        # Export the C callback so JS EM_ASM code can call _file_chooser_on_file_selected
+        "-sEXPORTED_FUNCTIONS=_main,_file_chooser_on_file_selected,_free"
+        # Runtime helpers used in JS EM_ASM blocks
+        "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,UTF8ToString,FS"
         "--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
 

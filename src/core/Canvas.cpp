@@ -14,9 +14,6 @@ static_assert(alignof(pelpaint::Pixel)       == alignof(pelpaint::core::PixelRGB
 
 namespace pelpaint {
 
-// ============================================================
-// Construction
-// ============================================================
 
 Canvas::Canvas(int w, int h)
     : width_(w)
@@ -27,9 +24,6 @@ Canvas::Canvas(int w, int h)
     InitDefaultLayers();
 }
 
-// ============================================================
-// Layer management
-// ============================================================
 
 void Canvas::InitDefaultLayers()
 {
@@ -108,9 +102,7 @@ void Canvas::SetActiveLayer(int i) noexcept
         activeLayerIndex_ = i;
 }
 
-// ============================================================
-// Pixel access
-// ============================================================
+/// @section Pixel access
 
 void Canvas::PutPixel(int x, int y, const Pixel& color) noexcept
 {
@@ -155,16 +147,13 @@ std::span<const Pixel> Canvas::ActiveLayerSpan() const noexcept
     return std::span<const Pixel>(layer->pixelData.data(), layer->pixelData.size());
 }
 
-// ============================================================
-// Composite
+/// @section Composite
 //
 // Blends all visible layers (sorted by zIndex) into compositeSurface_
 // using direct TilePixelsMutable() writes — no flat intermediate buffer.
 //
 // Background colour (dark grey 30,30,30) is written first, then each
 // visible layer is alpha-blended on top.
-// ============================================================
-
 void Canvas::Composite()
 {
     if (width_ <= 0 || height_ <= 0) { dirty_ = false; return; }
@@ -236,10 +225,7 @@ void Canvas::Composite()
     dirty_ = false;
 }
 
-// ============================================================
-// Canvas-level operations
-// ============================================================
-
+/// @section Canvas-level operations
 void Canvas::Resize(int newW, int newH)
 {
     if (newW <= 0 || newH <= 0) return;

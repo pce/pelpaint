@@ -3274,14 +3274,20 @@ void PixelPaintView::DrawFilesTab()
                 FileChooser::Instance().SaveFileDialog(
                     "Save PNG", ".png", currentFilename + ".png", "",
                     [this](const std::string& filepath) {
-                        if (!filepath.empty()) SaveToPNG(filepath);
+                        if (!filepath.empty()) {
+                            SaveToPNG(filepath);
+                            FileChooser::Instance().TriggerWASMDownload(filepath);
+                        }
                     }
                 );
             } else {
                 FileChooser::Instance().SaveFileDialog(
                     "Save TGA", ".tga", currentFilename + ".tga", "",
                     [this](const std::string& filepath) {
-                        if (!filepath.empty()) SaveToTGA(filepath);
+                        if (!filepath.empty()) {
+                            SaveToTGA(filepath);
+                            FileChooser::Instance().TriggerWASMDownload(filepath);
+                        }
                     }
                 );
             }
@@ -3291,7 +3297,10 @@ void PixelPaintView::DrawFilesTab()
             FileChooser::Instance().SaveFileDialog(
                 "Save SVG Pixel", ".svg", currentFilename + ".svg", "",
                 [this](const std::string& filepath) {
-                    if (!filepath.empty()) SaveToSVGPixel(filepath);
+                    if (!filepath.empty()) {
+                        SaveToSVGPixel(filepath);
+                        FileChooser::Instance().TriggerWASMDownload(filepath);
+                    }
                 }
             );
         }
@@ -3299,7 +3308,10 @@ void PixelPaintView::DrawFilesTab()
             FileChooser::Instance().SaveFileDialog(
                 "Save SVG Vector", ".svg", currentFilename + ".svg", "",
                 [this](const std::string& filepath) {
-                    if (!filepath.empty()) SaveToSVGVector(filepath);
+                    if (!filepath.empty()) {
+                        SaveToSVGVector(filepath);
+                        FileChooser::Instance().TriggerWASMDownload(filepath);
+                    }
                 }
             );
         }
@@ -3314,7 +3326,10 @@ void PixelPaintView::DrawFilesTab()
             FileChooser::Instance().SaveFileDialog(
                 "Save Depth Map", ".png", currentFilename + ".png", "",
                 [this](const std::string& filepath) {
-                    if (!filepath.empty()) SaveDepthMap(filepath);
+                    if (!filepath.empty()) {
+                        SaveDepthMap(filepath);
+                        FileChooser::Instance().TriggerWASMDownload(filepath);
+                    }
                 }
             );
         }
@@ -3335,7 +3350,10 @@ void PixelPaintView::DrawFilesTab()
             FileChooser::Instance().SaveFileDialog(
                 "Save Mesh", ".ply", currentFilename + ".ply", "",
                 [this](const std::string& filepath) {
-                    if (!filepath.empty()) SaveMesh(filepath);
+                    if (!filepath.empty()) {
+                        SaveMesh(filepath);
+                        FileChooser::Instance().TriggerWASMDownload(filepath);
+                    }
                 }
             );
         }
