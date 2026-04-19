@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../ColorPalettes.hpp"
+#include <imgui.h>
 
 namespace pelpaint {
 
@@ -17,6 +18,14 @@ struct Point2f {
 
     [[nodiscard]] constexpr bool operator==(const Point2f&) const noexcept = default;
 };
+
+inline Point2f ToPoint2f(const ImVec2& v) {
+    return Point2f{ v.x, v.y };
+}
+
+inline ImVec2 ToImVec2(const Point2f& p) {
+    return ImVec2(p.x, p.y);
+}
 
 struct Point2i {
     int x = 0;

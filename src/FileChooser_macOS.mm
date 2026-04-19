@@ -73,21 +73,27 @@ void FileChooser_macOS_OpenFile(
     const std::string& startPath,
     FileChooserCallback callback)
 {
+    // Copy all C++ strings by value -- the references would dangle after this
+    // function returns, before the dispatch_async block runs on the main queue.
+    std::string titleCopy     = title;
+    std::string filtersCopy   = filters;
+    std::string startPathCopy = startPath;
+
     // NSOpenPanel must be shown on the main thread.
     dispatch_async(dispatch_get_main_queue(), ^{
         NSOpenPanel *panel = [NSOpenPanel openPanel];
-        panel.title = @(title.c_str());
+        panel.title = @(titleCopy.c_str());
         panel.canChooseFiles          = YES;
         panel.canChooseDirectories    = NO;
         panel.allowsMultipleSelection = NO;
         panel.treatsFilePackagesAsDirectories = NO;
 
-        if (!startPath.empty()) {
-            NSURL *dirURL = [NSURL fileURLWithPath:@(startPath.c_str()) isDirectory:YES];
+        if (!startPathCopy.empty()) {
+            NSURL *dirURL = [NSURL fileURLWithPath:@(startPathCopy.c_str()) isDirectory:YES];
             panel.directoryURL = dirURL;
         }
 
-        ApplyFilters(panel, filters);
+        ApplyFilters(panel, filtersCopy);
 
         [panel beginWithCompletionHandler:^(NSModalResponse response) {
             std::string chosen;
@@ -105,18 +111,25 @@ void FileChooser_macOS_SaveFile(
     const std::string& startPath,
     FileChooserCallback callback)
 {
+    // Copy all C++ strings by value -- the references would dangle after this
+    // function returns, before the dispatch_async block runs on the main queue.
+    std::string titleCopy     = title;
+    std::string filtersCopy   = filters;
+    std::string filenameCopy  = suggestedFilename;
+    std::string startPathCopy = startPath;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         NSSavePanel *panel = [NSSavePanel savePanel];
-        panel.title = @(title.c_str());
-        panel.nameFieldStringValue = @(suggestedFilename.c_str());
+        panel.title = @(titleCopy.c_str());
+        panel.nameFieldStringValue = @(filenameCopy.c_str());
         panel.canCreateDirectories = YES;
 
-        if (!startPath.empty()) {
-            NSURL *dirURL = [NSURL fileURLWithPath:@(startPath.c_str()) isDirectory:YES];
+        if (!startPathCopy.empty()) {
+            NSURL *dirURL = [NSURL fileURLWithPath:@(startPathCopy.c_str()) isDirectory:YES];
             panel.directoryURL = dirURL;
         }
 
-        ApplyFilters(panel, filters);
+        ApplyFilters(panel, filtersCopy);
 
         [panel beginWithCompletionHandler:^(NSModalResponse response) {
             std::string chosen;

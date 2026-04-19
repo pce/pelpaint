@@ -31,7 +31,10 @@
     #include <TargetConditionals.h>
 #endif
 
-#include "ImGuiFileDialog.h"
+// ImGuiFileDialog is only compiled on non-Apple, non-WASM desktop platforms
+#if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#  include "ImGuiFileDialog.h"
+#endif
 
 namespace pelpaint {
 

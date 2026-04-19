@@ -15,6 +15,7 @@
 #include <sstream>
 #include <iomanip>
 #include <filesystem>
+#include "FileChooser.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
@@ -3371,68 +3372,162 @@ void PixelPaintView::DrawFilesTab()
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-#else
-    // Use lastDirectory instead of "." to remember previous location
-    std::string startDir = lastDirectory.empty() ? GetHomeDirectory() : lastDirectory;
+#elif defined(__APPLE__) && !TARGET_OS_IOS && !TARGET_OS_TV
+    // macOS desktop: native NSOpenPanel / NSSavePanel via FileChooser abstraction
+    {
+        std::string startDir = lastDirectory.empty() ? GetHomeDirectory() : lastDirectory;
 
-    ImGui::Text("Export");
-    const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh" };
-    ImGui::Combo("Export Type", &exportTypeIndex, exportTypes, static_cast<int>(sizeof(exportTypes) / sizeof(exportTypes[0])));
+        ImGui::Text("Export");
+        const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh" };
+        ImGui::Combo("Export Type", &exportTypeIndex, exportTypes, static_cast<int>(sizeof(exportTypes) / sizeof(exportTypes[0])));
 
-    if (exportTypeIndex == 0) {
-        const char* imageFormats[] = { "PNG", "TGA" };
-        if (imageExportFormat < 0 || imageExportFormat >= 2) imageExportFormat = 0;
-        ImGui::Combo("Image Format", &imageExportFormat, imageFormats, 2);
+        if (exportTypeIndex == 0) {
+            const char* imageFormats[] = { "PNG", "TGA" };
+            if (imageExportFormat < 0 || imageExportFormat >= 2) imageExportFormat = 0;
+            ImGui::Combo("Image Format", &imageExportFormat, imageFormats, 2);
 
-        if (ImGui::Button("Save As", ImVec2(-1, 0))) {
-            if (imageExportFormat == 0) {
-                ImGuiFileDialog::Instance()->OpenDialog("SavePNGDialog", "Save PNG", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
-            } else {
-                ImGuiFileDialog::Instance()->OpenDialog("SaveTGADialog", "Save TGA", ".tga", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+            if (ImGui::Button("Save As", ImVec2(-1, 0))) {
+                if (imageExportFormat == 0) {
+                    FileChooser::Instance().SaveFileDialog(
+                        "Save PNG", ".png", currentFilename + ".png", startDir,
+                        [this](const std::string& filepath) {
+                            if (!filepath.empty()) SaveToPNG(filepath);
+                        });
+                } else {
+                    FileChooser::Instance().SaveFileDialog(
+                        "Save TGA", ".tga", currentFilename + ".tga", startDir,
+                        [this](const std::string& filepath) {
+                            if (!filepath.empty()) SaveToTGA(filepath);
+                        });
+                }
+            }
+        } else if (exportTypeIndex == 1) {
+            if (ImGui::Button("Save SVG Pixel", ImVec2(-1, 0))) {
+                FileChooser::Instance().SaveFileDialog(
+                    "Save SVG Pixel", ".svg", currentFilename + ".svg", startDir,
+                    [this](const std::string& filepath) {
+                        if (!filepath.empty()) SaveToSVGPixel(filepath);
+                    });
+            }
+            if (ImGui::Button("Save SVG Vector", ImVec2(-1, 0))) {
+                FileChooser::Instance().SaveFileDialog(
+                    "Save SVG Vector", ".svg", currentFilename + ".svg", startDir,
+                    [this](const std::string& filepath) {
+                        if (!filepath.empty()) SaveToSVGVector(filepath);
+                    });
+            }
+        } else if (exportTypeIndex == 2) {
+            ImGui::Text("Depth Map");
+            pelpaint::ui::SliderIntStepStateful(
+                "Depth Map Grid Size", 1, 128, 1, "depth_map_grid_size", depthMapGridSize,
+                [&](int v){ depthMapGridSize = v; }
+            );
+            depthMapGridSize = std::max(1, depthMapGridSize);
+            if (ImGui::Button("Export Depth Map", ImVec2(-1, 0))) {
+                FileChooser::Instance().SaveFileDialog(
+                    "Save Depth Map", ".png", currentFilename + ".png", startDir,
+                    [this](const std::string& filepath) {
+                        if (!filepath.empty()) SaveDepthMap(filepath);
+                    });
+            }
+        } else if (exportTypeIndex == 3) {
+            ImGui::Text("Mesh");
+            const char* meshModes[] = { "Solid", "Wireframe", "LoPoly", "PixelPerfect" };
+            ImGui::Combo("Mesh Type", &meshExportMode, meshModes, static_cast<int>(sizeof(meshModes) / sizeof(meshModes[0])));
+
+            const char* meshFormats[] = { "PLY" };
+            ImGui::Combo("Mesh Format", &meshExportFormat, meshFormats, 1);
+
+            pelpaint::ui::SliderIntStepStateful(
+                "Mesh Grid Size", 1, 128, 1, "mesh_export_grid_size", meshExportGridSize,
+                [&](int v){ meshExportGridSize = v; }
+            );
+            meshExportGridSize = std::max(1, meshExportGridSize);
+            if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
+                FileChooser::Instance().SaveFileDialog(
+                    "Save Mesh", ".ply", currentFilename + ".ply", startDir,
+                    [this](const std::string& filepath) {
+                        if (!filepath.empty()) SaveMesh(filepath);
+                    });
             }
         }
-    } else if (exportTypeIndex == 1) {
-        if (ImGui::Button("Save SVG Pixel", ImVec2(-1, 0))) {
-            ImGuiFileDialog::Instance()->OpenDialog("SaveSVGPixelDialog", "Save SVG Pixel", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
-        }
-        if (ImGui::Button("Save SVG Vector", ImVec2(-1, 0))) {
-            ImGuiFileDialog::Instance()->OpenDialog("SaveSVGVectorDialog", "Save SVG Vector", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
-        }
-    } else if (exportTypeIndex == 2) {
-        ImGui::Text("Depth Map");
-        pelpaint::ui::SliderIntStepStateful(
-            "Depth Map Grid Size", 1, 128, 1, "depth_map_grid_size", depthMapGridSize,
-            [&](int v){ depthMapGridSize = v; }
-        );
-        depthMapGridSize = std::max(1, depthMapGridSize);
-        if (ImGui::Button("Export Depth Map", ImVec2(-1, 0))) {
-            ImGuiFileDialog::Instance()->OpenDialog("SaveDepthMapDialog", "Save Depth Map", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
-        }
-    } else if (exportTypeIndex == 3) {
-        ImGui::Text("Mesh");
-        const char* meshModes[] = { "Solid", "Wireframe", "LoPoly", "PixelPerfect" };
-        ImGui::Combo("Mesh Type", &meshExportMode, meshModes, static_cast<int>(sizeof(meshModes) / sizeof(meshModes[0])));
 
-        const char* meshFormats[] = { "PLY" };
-        ImGui::Combo("Mesh Format", &meshExportFormat, meshFormats, 1);
-
-        pelpaint::ui::SliderIntStepStateful(
-            "Mesh Grid Size", 1, 128, 1, "mesh_export_grid_size", meshExportGridSize,
-            [&](int v){ meshExportGridSize = v; }
-        );
-        meshExportGridSize = std::max(1, meshExportGridSize);
-        if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
-            ImGuiFileDialog::Instance()->OpenDialog("SaveMeshDialog", "Save Mesh", ".ply", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+        if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
+            FileChooser::Instance().OpenFileDialog(
+                "Load Image", ".tga,.png,.jpg,.jpeg", startDir,
+                [this](const std::string& filepath) {
+                    if (!filepath.empty()) LoadFromImage(filepath);
+                });
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
     }
+#else
+    // Windows / Linux desktop: ImGuiFileDialog modal dialogs
+    {
+        std::string startDir = lastDirectory.empty() ? GetHomeDirectory() : lastDirectory;
 
-    if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
-        ImGuiFileDialog::Instance()->OpenDialog("LoadImageDialog", "Load Image", ".tga,.png,.jpg,.jpeg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal);
+        ImGui::Text("Export");
+        const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh" };
+        ImGui::Combo("Export Type", &exportTypeIndex, exportTypes, static_cast<int>(sizeof(exportTypes) / sizeof(exportTypes[0])));
+
+        if (exportTypeIndex == 0) {
+            const char* imageFormats[] = { "PNG", "TGA" };
+            if (imageExportFormat < 0 || imageExportFormat >= 2) imageExportFormat = 0;
+            ImGui::Combo("Image Format", &imageExportFormat, imageFormats, 2);
+
+            if (ImGui::Button("Save As", ImVec2(-1, 0))) {
+                if (imageExportFormat == 0) {
+                    ImGuiFileDialog::Instance()->OpenDialog("SavePNGDialog", "Save PNG", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+                } else {
+                    ImGuiFileDialog::Instance()->OpenDialog("SaveTGADialog", "Save TGA", ".tga", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+                }
+            }
+        } else if (exportTypeIndex == 1) {
+            if (ImGui::Button("Save SVG Pixel", ImVec2(-1, 0))) {
+                ImGuiFileDialog::Instance()->OpenDialog("SaveSVGPixelDialog", "Save SVG Pixel", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+            }
+            if (ImGui::Button("Save SVG Vector", ImVec2(-1, 0))) {
+                ImGuiFileDialog::Instance()->OpenDialog("SaveSVGVectorDialog", "Save SVG Vector", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+            }
+        } else if (exportTypeIndex == 2) {
+            ImGui::Text("Depth Map");
+            pelpaint::ui::SliderIntStepStateful(
+                "Depth Map Grid Size", 1, 128, 1, "depth_map_grid_size", depthMapGridSize,
+                [&](int v){ depthMapGridSize = v; }
+            );
+            depthMapGridSize = std::max(1, depthMapGridSize);
+            if (ImGui::Button("Export Depth Map", ImVec2(-1, 0))) {
+                ImGuiFileDialog::Instance()->OpenDialog("SaveDepthMapDialog", "Save Depth Map", ".png", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+            }
+        } else if (exportTypeIndex == 3) {
+            ImGui::Text("Mesh");
+            const char* meshModes[] = { "Solid", "Wireframe", "LoPoly", "PixelPerfect" };
+            ImGui::Combo("Mesh Type", &meshExportMode, meshModes, static_cast<int>(sizeof(meshModes) / sizeof(meshModes[0])));
+
+            const char* meshFormats[] = { "PLY" };
+            ImGui::Combo("Mesh Format", &meshExportFormat, meshFormats, 1);
+
+            pelpaint::ui::SliderIntStepStateful(
+                "Mesh Grid Size", 1, 128, 1, "mesh_export_grid_size", meshExportGridSize,
+                [&](int v){ meshExportGridSize = v; }
+            );
+            meshExportGridSize = std::max(1, meshExportGridSize);
+            if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
+                ImGuiFileDialog::Instance()->OpenDialog("SaveMeshDialog", "Save Mesh", ".ply", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+            }
+        }
+
+        if (ImGui::Button("Load Image", ImVec2(-1, 0))) {
+            ImGuiFileDialog::Instance()->OpenDialog("LoadImageDialog", "Load Image", ".tga,.png,.jpg,.jpeg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal);
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
     }
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
 #endif
 
     // Auto-Pixelify on Load settings
@@ -3598,8 +3693,8 @@ void PixelPaintView::Draw(std::string_view label)
         }
     }
 
-    #if !TARGET_OS_IOS && !TARGET_OS_TV
-    // File dialogs
+    #if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+    // File dialogs (Windows / Linux desktop only — macOS uses native NSOpenPanel)
     ImVec2 dialogSize = ImVec2(800, 600);
 
     auto saveCompositeImage = [&](const std::string& filename, bool asPng) -> bool {
