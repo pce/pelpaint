@@ -99,21 +99,15 @@ PixelPaintView::PixelPaintView()
     undo_.Push(canvas_.MakeSnapshot("Initial state"));
 }
 
-// AddSlider and AddSliderFloat removed.
-// Use pelpaint::ui::SliderIntStepStateful / SliderFloatStepStateful instead.
-
-// Destructor
 PixelPaintView::~PixelPaintView()
 {
     DestroyTexture();
 }
 
-// ---------------------------------------------------------------------------
-// Layer management — thin wrappers over Canvas
-// ---------------------------------------------------------------------------
 
 void PixelPaintView::InitializeLayers()
 {
+    // Layer management is a thin wrapper over Canvas
     canvas_.InitDefaultLayers();
     SyncDimsFromCanvas();
 }
@@ -133,10 +127,9 @@ void PixelPaintView::ReorderLayers(int fromIndex, int toIndex)
     canvas_.ReorderLayers(fromIndex, toIndex);
 }
 
-// ---------------------------------------------------------------------------
-// CompositeLayers — kept for export functions that need a flat RGBA buffer.
+// CompositeLayers, TODO check why keep it for export?
+// Refactor to ImgObject that handles a flat RGBA buffer.
 // Reads from canvas_.Layers() (no canvasData involved).
-// ---------------------------------------------------------------------------
 
 void PixelPaintView::CompositeLayers(std::vector<pelpaint::Pixel>& output) const
 {
@@ -166,10 +159,8 @@ void PixelPaintView::CompositeLayers(std::vector<pelpaint::Pixel>& output) const
     }
 }
 
-// ---------------------------------------------------------------------------
 // RenderLayerToCanvas — force an immediate composite + texture refresh.
 // Normal drawing path uses the per-frame IsDirty check in Draw() instead.
-// ---------------------------------------------------------------------------
 
 void PixelPaintView::RenderLayerToCanvas()
 {
@@ -394,10 +385,11 @@ void PixelPaintView::DrawSpray(int x, int y, float radius,
     tools::DrawSpray(ctx, x, y, radius, color, density);
 }
 
-// ----------------------------------------------------------------------------
-// SDL pen / stylus event forwarding
-// ----------------------------------------------------------------------------
-
+/**
+ * @brief  SDL pen / stylus event forwarding
+ * @param  pressure The pressure value
+ * @return void
+ */
 void PixelPaintView::SetCurrentPressure(float pressure) noexcept
 {
     currentPressure = std::clamp(pressure, 0.0f, 1.0f);
@@ -406,6 +398,12 @@ void PixelPaintView::SetCurrentPressure(float pressure) noexcept
     }
 }
 
+/**
+ * @brief  SDL pen / stylus event forwarding
+ * @param  x
+ * @param  y
+ * @return void
+ */
 void PixelPaintView::SetPenTilt(float x, float y) noexcept
 {
     penTiltX = std::clamp(x, -1.0f, 1.0f);
@@ -414,10 +412,20 @@ void PixelPaintView::SetPenTilt(float x, float y) noexcept
     brushSettings.tiltY = penTiltY;
 }
 
-// ----------------------------------------------------------------------------
-// BrushMode::Pen — calligraphic nib stroke (pressure + tilt)
-// ----------------------------------------------------------------------------
-
+/**
+ * @brief  BrushMode::Pen  calligraphic nib stroke (pressure + tilt)
+ * @param  x0       int
+ * @param  y0       int
+ * @param  x1       int
+ * @param  y1       int
+ * @param  color    Pixel&
+ * @param  float    brushSize
+ * @param  pressure float
+ * @param  tiltX    float
+ * @param  tiltY    float
+ *
+ * @return void
+ */
 void PixelPaintView::DrawPenStroke(int x0, int y0, int x1, int y1,
                                     const pelpaint::Pixel& color,
                                     float brushSize,
@@ -430,10 +438,8 @@ void PixelPaintView::DrawPenStroke(int x0, int y0, int x1, int y1,
                          pressure, tiltX, tiltY);
 }
 
-// ----------------------------------------------------------------------------
-// BrushMode::PixelBrush — watercolor scatter with dwell spread
-// ----------------------------------------------------------------------------
 
+//! @brief  BrushMode::PixelBrush — watercolor scatter with dwell spread
 void PixelPaintView::DrawPixelBrush(int cx, int cy, float radius,
                                      const pelpaint::Pixel& color,
                                      float pressure, float accumulation)
@@ -710,7 +716,7 @@ void PixelPaintView::ApplyOrderedDithering(const std::vector<pelpaint::Pixel>& p
     PushUndo("Apply ordered dithering");
 }
 
-// Pixelify - Create pixel art effect by averaging blocks and optionally quantizing to palette
+//! @brief ApplyPixelify: creates pixel effect by averaging blocks and optionally quantizing to palette
 void PixelPaintView::ApplyPixelify(int pixelSize, bool usePalette)
 {
     Layer* activeLayer = GetActiveLayer();
@@ -772,7 +778,7 @@ void PixelPaintView::ApplyPixelify(int pixelSize, bool usePalette)
     PushUndo("Pixelify");
 }
 
-// Calculate automatic pixel size based on image dimensions
+//! @brief Calculate automatic pixel size based on image dimensions
 int PixelPaintView::CalculateAutoPixelSize(int imageWidth, int imageHeight) const
 {
     // Aim for roughly 256-512 visible pixels (reasonable for editing)
@@ -787,7 +793,7 @@ int PixelPaintView::CalculateAutoPixelSize(int imageWidth, int imageHeight) cons
     return 10;                         // Massive image
 }
 
-// Smart Repaint - Get shaded color based on background brightness
+//! @brief Smart Repaint - Get shaded color based on background brightness
 pelpaint::Pixel PixelPaintView::GetShadedColor(const pelpaint::Pixel& baseColor, const pelpaint::Pixel& bgColor, bool darker)
 {
     pelpaint::Pixel result = baseColor;
@@ -813,14 +819,14 @@ pelpaint::Pixel PixelPaintView::GetShadedColor(const pelpaint::Pixel& baseColor,
     return result;
 }
 
-// Smart Repaint - Check if color is light or dark
+//! @brief Smart Repaint - Check if color is light or dark
 bool PixelPaintView::IsColorLight(const pelpaint::Pixel& color) const
 {
     float brightness = (color.r + color.g + color.b) / (3.0f * 255.0f);
     return brightness > 0.5f;
 }
 
-// Smart Repaint - Draw shape with intelligent shading
+//! @brief Smart Repaint - Draw shape with intelligent shading
 void PixelPaintView::DrawShapeRedrawShape(int cx, int cy, const pelpaint::Pixel& fgColor, const pelpaint::Pixel& bgColor, ShapeRedrawShape shape, int size)
 {
     Layer* activeLayer = GetActiveLayer();
@@ -901,15 +907,13 @@ void PixelPaintView::DrawShapeRedrawShape(int cx, int cy, const pelpaint::Pixel&
     textureNeedsUpdate = true;
 }
 
-// -----------------------------------------------------------------------
-// Shape Redraw Filter - pixelization-style effect using Square, Dot, or
-// Custom 8x8 shape stamp per block.
-// -----------------------------------------------------------------------
+//! @brief Shape Redraw Filter - pixelization-style effect using Square, Dot, or
 void PixelPaintView::ApplyShapeRedrawFilter()
 {
     Layer* activeLayer = GetActiveLayer();
     if (!activeLayer) return;
 
+    // Custom 8x8 shape stamp per block.
     const int blockSize = std::max(1, shapeRedrawFilterBlockSize);
     const int padding   = std::max(0, shapeRedrawFilterPadding);
     const std::vector<pelpaint::Pixel>& palette =
@@ -1017,7 +1021,7 @@ void PixelPaintView::ApplyShapeRedrawFilter()
     PushUndo("Shape Redraw Filter");
 }
 
-// Undo/Redo
+//! @brief Undo/Redo
 void PixelPaintView::PushUndo(std::string_view description)
 {
     undo_.Push(canvas_.MakeSnapshot(description));
@@ -1046,7 +1050,7 @@ void PixelPaintView::ClearUndoStack()
     undo_.Clear();
 }
 
-// File I/O
+/// @brief File I/O
 bool PixelPaintView::SaveToTGA(const std::string& filename)
 {
     canvas_.Composite();
@@ -2915,6 +2919,20 @@ void PixelPaintView::DrawToolTab()
         ImGui::Spacing();
         ImGui::TextDisabled("Drag on canvas to paint shapes.");
     }
+
+    ImGui::Spacing();
+
+    // Procedural Pixel Generator
+    if (ImGui::CollapsingHeader("Pixel Generator")) {
+        DrawProceduralGenTab();
+    }
+
+    ImGui::Spacing();
+
+    // Particle System Burst
+    if (ImGui::CollapsingHeader("Particle Burst")) {
+        DrawParticleBurstUI();
+    }
 }
 
 // COLOR TAB - Color picker and palette
@@ -3783,6 +3801,263 @@ void PixelPaintView::Draw(std::string_view label)
     ImGui::EndChild();
 
     ImGui::End();
+}
+
+
+// =============================================================================
+// Procedural Generator helpers
+// =============================================================================
+
+void PixelPaintView::StampPixelPerfectToLayer(const tools::PixelPerfectGenerator::PixelPerfect& art) {
+    if (art.pixels.empty()) return;
+    PushUndo("Pixel Generator");
+    const int stampW = std::min(art.width,  canvasWidth);
+    const int stampH = std::min(art.height, canvasHeight);
+    for (int y = 0; y < stampH; ++y) {
+        for (int x = 0; x < stampW; ++x) {
+            const Pixel& c = art.pixels[static_cast<std::size_t>(y * art.width + x)];
+            if (c.a == 0) continue;
+            PutPixel(x, y, c);
+        }
+    }
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::BakeParticleBurst() {
+    tools::ParticleConfig cfg;
+    cfg.maxParticles = ppPartMaxCount;
+    cfg.emissionRate = ppPartRate;
+    cfg.minVelocity  = Point2f{ ppPartVelMin, ppPartVelMin };
+    cfg.maxVelocity  = Point2f{ ppPartVelMax, ppPartVelMax };
+    cfg.minLife      = ppPartMinLife;
+    cfg.maxLife      = ppPartMaxLife;
+    cfg.minSize      = ppPartMinSize;
+    cfg.maxSize      = ppPartMaxSize;
+    cfg.startColor   = ppPartColorStart;
+    cfg.endColor     = ppPartColorEnd;
+    cfg.loop         = false;
+
+    tools::ParticleSystem ps;
+    ps.Init(cfg);
+
+    Point2f emitter{ static_cast<float>(canvasWidth) * 0.5f,
+                  static_cast<float>(canvasHeight) * 0.5f };
+    const std::size_t bufSz = static_cast<std::size_t>(canvasWidth * canvasHeight);
+    std::vector<Pixel> buf(bufSz, Pixel{0, 0, 0, 0});
+
+    constexpr float kStep = 0.033f; // ~30 fps sim
+    float elapsed = 0.f;
+    while (elapsed < ppPartDuration && !ps.IsFinished()) {
+        ps.Update(kStep, emitter);
+        ps.DrawToBuffer(buf, canvasWidth, canvasHeight);
+        elapsed += kStep;
+    }
+
+    PushUndo("Particle Burst");
+    for (std::size_t i = 0; i < bufSz; ++i) {
+        if (buf[i].a == 0) continue;
+        const int x = static_cast<int>(i) % canvasWidth;
+        const int y = static_cast<int>(i) / canvasWidth;
+        PutPixel(x, y, buf[i]);
+    }
+    textureNeedsUpdate = true;
+}
+
+// =============================================================================
+// Procedural Generator UI
+// =============================================================================
+
+void PixelPaintView::DrawProceduralGenTab() {
+    using PPG = tools::PixelPerfectGenerator;
+    auto colorEdit = [](const char* label, Pixel& px) {
+        float col[4] = { px.r/255.f, px.g/255.f, px.b/255.f, px.a/255.f };
+        if (ImGui::ColorEdit4(label, col,
+                ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
+            px.r = static_cast<uint8_t>(col[0]*255);
+            px.g = static_cast<uint8_t>(col[1]*255);
+            px.b = static_cast<uint8_t>(col[2]*255);
+            px.a = static_cast<uint8_t>(col[3]*255);
+        }
+    };
+
+    ImGui::Checkbox("Use canvas size", &ppgFitCanvas);
+    if (!ppgFitCanvas) {
+        pelpaint::ui::SliderIntStepStateful("Width",  8, 1024, 8, "ppg_w", ppgWidth,  [&](int v){ ppgWidth  = v; });
+        pelpaint::ui::SliderIntStepStateful("Height", 8, 1024, 8, "ppg_h", ppgHeight, [&](int v){ ppgHeight = v; });
+    }
+    const int genW = ppgFitCanvas ? canvasWidth  : ppgWidth;
+    const int genH = ppgFitCanvas ? canvasHeight : ppgHeight;
+
+    ImGui::Spacing();
+
+    const char* methods[] = { "Noise", "Cellular Automata", "L-System", "Pattern" };
+    ImGui::Combo("Method", &ppgMethod, methods, 4);
+    ImGui::Spacing();
+
+    if (ppgMethod == 0) {
+        ImGui::SliderFloat("Scale##noise", &ppgNoiseScale, 0.005f, 0.5f, "%.3f");
+        colorEdit("Dark colour##noise",  ppgNoiseColor1);
+        colorEdit("Light colour##noise", ppgNoiseColor2);
+
+    } else if (ppgMethod == 1) {
+        pelpaint::ui::SliderIntStepStateful("Birth rule",   1, 8, 1, "ppg_cb", ppgCellBirth,   [&](int v){ ppgCellBirth   = v; });
+        pelpaint::ui::SliderIntStepStateful("Survive rule", 1, 8, 1, "ppg_cs", ppgCellSurvive, [&](int v){ ppgCellSurvive = v; });
+        ImGui::SliderFloat("Initial fill",  &ppgCellFill,  0.0f, 1.0f, "%.2f");
+        pelpaint::ui::SliderIntStepStateful("Iterations",  1, 20, 1, "ppg_ci", ppgCellIters,   [&](int v){ ppgCellIters   = v; });
+        colorEdit("Alive##cell", ppgCellAlive);
+        colorEdit("Dead##cell",  ppgCellDead);
+
+    } else if (ppgMethod == 2) {
+        const char* presets[] = { "Plant / Tree", "Koch Curve", "Dragon Curve", "Sierpinski" };
+        ImGui::Combo("Preset##lsys", &ppgLSysPreset, presets, 4);
+        pelpaint::ui::SliderIntStepStateful("Iterations##lsys", 1, 7, 1, "ppg_li", ppgLSysIter, [&](int v){ ppgLSysIter = v; });
+        ImGui::SliderFloat("Angle##lsys", &ppgLSysAngle, 5.f, 120.f, "%.1f");
+        colorEdit("Branch colour##lsys", ppgLSysColor);
+
+    } else if (ppgMethod == 3) {
+        const char* pats[] = { "Checkerboard", "H-Stripes", "V-Stripes", "Dots" };
+        ImGui::Combo("Pattern##pat", &ppgPatPreset, pats, 4);
+        pelpaint::ui::SliderIntStepStateful("Cell size##pat", 1, 32, 1, "ppg_ps", ppgPatScale, [&](int v){ ppgPatScale = v; });
+        colorEdit("Colour A##pat", ppgPatColor1);
+        colorEdit("Colour B##pat", ppgPatColor2);
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    if (ImGui::Button("Generate & Apply to Layer", ImVec2(-1, 0))) {
+        PPG::PixelPerfect art;
+
+        if (ppgMethod == 0) {
+            art = PPG::GenerateNoise(genW, genH, ppgNoiseScale, { ppgNoiseColor1, ppgNoiseColor2 });
+
+        } else if (ppgMethod == 1) {
+            PPG::CellularConfig cfg;
+            cfg.birth_rule    = ppgCellBirth;
+            cfg.survive_rule  = ppgCellSurvive;
+            cfg.initial_fill  = ppgCellFill;
+            cfg.iterations    = ppgCellIters;
+            cfg.alive_color   = ppgCellAlive;
+            cfg.dead_color    = ppgCellDead;
+            art = PPG::GenerateCellular(cfg, genW, genH);
+
+        } else if (ppgMethod == 2) {
+            PPG::LSysConfig cfg;
+            cfg.angle      = ppgLSysAngle;
+            cfg.iterations = ppgLSysIter;
+            cfg.colors["branch"] = ppgLSysColor;
+
+            switch (ppgLSysPreset) {
+                case 0:
+                    cfg.axiom = "X";
+                    cfg.rules['X'] = "F+[[X]-X]-F[-FX]+X";
+                    cfg.rules['F'] = "FF";
+                    break;
+                case 1:
+                    cfg.axiom      = "F--F--F";
+                    cfg.rules['F'] = "F+F--F+F";
+                    cfg.angle      = 60.f;
+                    break;
+                case 2:
+                    cfg.axiom      = "FX";
+                    cfg.rules['X'] = "X+YF+";
+                    cfg.rules['Y'] = "-FX-Y";
+                    cfg.angle      = 90.f;
+                    break;
+                case 3:
+                    cfg.axiom      = "F-G-G";
+                    cfg.rules['F'] = "F-G+F+G-F";
+                    cfg.rules['G'] = "GG";
+                    cfg.angle      = 120.f;
+                    break;
+            }
+            art = PPG::GenerateLSystem(cfg, genW, genH);
+
+        } else if (ppgMethod == 3) {
+            const int sc = std::max(1, ppgPatScale);
+
+            PPG::PatternConfig cfg;
+            cfg.repeat_x = true;
+            cfg.repeat_y = true;
+            cfg.colors['#'] = ppgPatColor1;
+            cfg.colors['.'] = ppgPatColor2;
+
+            switch (ppgPatPreset) {
+                case 0: {
+                    std::string row1, row2;
+                    for (int i = 0; i < sc; ++i) { row1 += '#'; row2 += '.'; }
+                    for (int i = 0; i < sc; ++i) { row1 += '.'; row2 += '#'; }
+                    for (int r = 0; r < sc; ++r) cfg.pattern.push_back(row1);
+                    for (int r = 0; r < sc; ++r) cfg.pattern.push_back(row2);
+                    break;
+                }
+                case 1: {
+                    std::string rowA(sc * 2, '#'), rowB(sc * 2, '.');
+                    for (int r = 0; r < sc; ++r) cfg.pattern.push_back(rowA);
+                    for (int r = 0; r < sc; ++r) cfg.pattern.push_back(rowB);
+                    break;
+                }
+                case 2: {
+                    std::string row;
+                    for (int i = 0; i < sc; ++i) row += '#';
+                    for (int i = 0; i < sc; ++i) row += '.';
+                    cfg.pattern.push_back(row);
+                    break;
+                }
+                case 3: {
+                    std::string rowD(sc * 2, '.'), rowR = rowD;
+                    if (sc < static_cast<int>(rowR.size())) rowR[sc] = '#';
+                    for (int r = 0; r < sc; ++r) cfg.pattern.push_back(rowD);
+                    cfg.pattern.push_back(rowR);
+                    for (int r = 0; r < sc - 1; ++r) cfg.pattern.push_back(rowD);
+                    break;
+                }
+            }
+            art = PPG::GeneratePattern(cfg, genW, genH);
+        }
+
+        StampPixelPerfectToLayer(art);
+    }
+}
+
+// =============================================================================
+// Particle Burst UI
+// =============================================================================
+
+void PixelPaintView::DrawParticleBurstUI() {
+    auto colorEdit = [](const char* label, Pixel& px) {
+        float col[4] = { px.r/255.f, px.g/255.f, px.b/255.f, px.a/255.f };
+        if (ImGui::ColorEdit4(label, col,
+                ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar)) {
+            px.r = static_cast<uint8_t>(col[0]*255);
+            px.g = static_cast<uint8_t>(col[1]*255);
+            px.b = static_cast<uint8_t>(col[2]*255);
+            px.a = static_cast<uint8_t>(col[3]*255);
+        }
+    };
+
+    pelpaint::ui::SliderIntStepStateful("Max particles", 10, 2000, 10, "pp_cnt", ppPartMaxCount, [&](int v){ ppPartMaxCount = v; });
+    ImGui::SliderFloat("Emission rate",  &ppPartRate,     1.f, 500.f, "%.0f/s");
+    ImGui::SliderFloat("Min life (s)",   &ppPartMinLife,  0.1f, 5.f, "%.2f");
+    ImGui::SliderFloat("Max life (s)",   &ppPartMaxLife,  0.1f, 5.f, "%.2f");
+    ppPartMaxLife = std::max(ppPartMaxLife, ppPartMinLife);
+    ImGui::SliderFloat("Min size",       &ppPartMinSize,  0.5f, 16.f, "%.1f");
+    ImGui::SliderFloat("Max size",       &ppPartMaxSize,  0.5f, 16.f, "%.1f");
+    ppPartMaxSize = std::max(ppPartMaxSize, ppPartMinSize);
+    ImGui::SliderFloat("Vel min",        &ppPartVelMin, -200.f, 0.f,   "%.0f");
+    ImGui::SliderFloat("Vel max",        &ppPartVelMax,    0.f, 200.f, "%.0f");
+    ppPartVelMax = std::max(ppPartVelMax, ppPartVelMin + 1.f);
+    ImGui::SliderFloat("Duration (s)",   &ppPartDuration, 0.5f, 10.f, "%.1f");
+    ImGui::Spacing();
+    colorEdit("Start colour", ppPartColorStart);
+    colorEdit("End colour",   ppPartColorEnd);
+    ImGui::Spacing();
+    ImGui::TextDisabled("Particles emit from canvas centre.");
+    ImGui::Spacing();
+    if (ImGui::Button("Bake Particle Burst to Layer", ImVec2(-1, 0))) {
+        BakeParticleBurst();
+    }
 }
 
 } // namespace pelpaint

@@ -176,6 +176,8 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
         src/tools/DrawingAlgorithms.cpp
+        src/tools/ParticleSystem.cpp
+        src/tools/PixelPerfectGenerator.cpp
         src/FileChooser.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
     )
@@ -200,6 +202,8 @@ else()
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
         src/tools/DrawingAlgorithms.cpp
+        src/tools/ParticleSystem.cpp
+        src/tools/PixelPerfectGenerator.cpp
         src/FileChooser.cpp
     )
 endif()

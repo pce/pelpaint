@@ -36,6 +36,9 @@
 #  include "ImGuiFileDialog.h"
 #endif
 
+#include "tools/PixelPerfectGenerator.hpp"
+#include "tools/ParticleSystem.hpp"
+
 namespace pelpaint {
 
 namespace fs = std::filesystem;
@@ -258,6 +261,51 @@ private:
     bool                  shapeRedrawFilterUsePalette = false;
 
     std::array<bool, 64>  shapeRedrawCustomMap = {};
+    // ==================================================================== 
+    // Pixel Generator
+    // ====================================================================
+    int  ppgMethod     = 0;    // 0=Noise 1=Cellular 2=L-System 3=Pattern
+    bool ppgFitCanvas  = true;
+    int  ppgWidth      = 64;
+    int  ppgHeight     = 64;
+    // Noise
+    float        ppgNoiseScale  = 0.05f;
+    Pixel        ppgNoiseColor1 { 20, 20, 60, 255 };
+    Pixel        ppgNoiseColor2 { 220, 220, 255, 255 };
+    // Cellular automata
+    int          ppgCellBirth   = 3;
+    int          ppgCellSurvive = 4;
+    float        ppgCellFill    = 0.45f;
+    int          ppgCellIters   = 5;
+    Pixel        ppgCellAlive   { 200, 200, 200, 255 };
+    Pixel        ppgCellDead    {  30,  30,  30, 255 };
+    // L-System
+    int          ppgLSysPreset  = 0;    // 0=Plant 1=Koch 2=Dragon 3=Sierpinski
+    int          ppgLSysIter    = 4;
+    float        ppgLSysAngle   = 25.f;
+    Pixel        ppgLSysColor   { 80, 180, 80, 255 };
+    // Pattern
+    int          ppgPatPreset   = 0;    // 0=Checker 1=HStripes 2=VStripes 3=Dots
+    int          ppgPatScale    = 4;    // pixels per pattern cell
+    Pixel        ppgPatColor1   { 255, 255, 255, 255 };
+    Pixel        ppgPatColor2   {   0,   0,   0, 255 };
+
+    // ====================================================================
+    // Particle Burst
+    // ====================================================================
+    int          ppPartMaxCount   = 300;
+    float        ppPartRate       = 80.f;
+    float        ppPartMinLife    = 0.5f;
+    float        ppPartMaxLife    = 2.0f;
+    float        ppPartMinSize    = 1.f;
+    float        ppPartMaxSize    = 3.f;
+    float        ppPartVelMin     = -40.f;
+    float        ppPartVelMax     =  40.f;
+    float        ppPartDuration   = 2.5f;
+    Pixel        ppPartColorStart { 255, 200,  50, 255 };
+    Pixel        ppPartColorEnd   { 255,  50,  50,   0 };
+
+
 
     // ====================================================================
     // Selection
@@ -410,6 +458,11 @@ private:
     void DrawFilterTab();
     void DrawFilesTab();
     void DrawLayersTab();
+    void DrawProceduralGenTab();
+    void DrawParticleBurstUI();
+    void StampPixelPerfectToLayer(const tools::PixelPerfectGenerator::PixelPerfect& art);
+    void BakeParticleBurst();
+
 
     // ====================================================================
     // Input handling
