@@ -244,6 +244,8 @@ private:
     int imageExportFormat  = 0;
     int meshExportFormat   = 0;
     int depthMapGridSize   = 8;
+    int   depthMapColorMode = 0;     // 0=Grayscale  1=FalseColor  2=WarmTone
+    bool  depthMapInvert    = false;
     int meshExportGridSize = 8;
     int meshExportMode     = 0;
 
@@ -417,6 +419,7 @@ private:
     bool SaveToSVGPixel(const std::string& filename);
     bool SaveToSVGVector(const std::string& filename);
     bool SaveDepthMap(const std::string& filename);
+    void GenerateDepthMapLayer();
     bool SaveMesh(const std::string& filename);
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);

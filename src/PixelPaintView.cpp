@@ -1184,6 +1184,46 @@ bool PixelPaintView::SaveDepthMap(const std::string& filename)
     return success;
 }
 
+void PixelPaintView::GenerateDepthMapLayer()
+{
+    using DMG = exporter::DepthMapGenerator;
+
+    // Composite all visible layers into a flat view.
+    canvas_.Composite();
+    const core::ImageView coreView = canvas_.CompositeSurface().Flatten();
+
+    pelpaint::ImageView view;
+    view.data     = coreView.data;
+    view.width    = static_cast<std::uint32_t>(canvasWidth);
+    view.height   = static_cast<std::uint32_t>(canvasHeight);
+    view.stride   = view.width * 4;
+    view.channels = 4;
+
+    // Choose color mode.
+    const auto colorMode = static_cast<DMG::ColorMode>(depthMapColorMode);
+
+    std::vector<pelpaint::Pixel> pixels;
+    if (!DMG::BuildDepthMapRGBA(view, colorMode, depthMapInvert, pixels))
+        return;
+
+    // Add a new layer and write the depth-map pixels into it.
+    PushUndo("Depth Map Layer");
+
+    canvas_.AddLayer("Depth Map");
+
+    // Activate the new layer (it was appended last).
+    const int newIdx = static_cast<int>(canvas_.Layers().size()) - 1;
+    canvas_.SetActiveLayer(newIdx);
+
+    Layer* layer = canvas_.ActiveLayer();
+    if (!layer) return;
+
+    layer->pixelData = std::move(pixels);
+
+    canvas_.SetDirty();
+    textureNeedsUpdate = true;
+}
+
 bool PixelPaintView::SaveMesh(const std::string& filename)
 {
     if (meshExportGridSize < 1) meshExportGridSize = 1;
@@ -1937,35 +1977,51 @@ void PixelPaintView::HandleCanvasInput()
     }
 
     // ---------------------------------------------------------------
-    // Zoom: scroll wheel (no modifier needed) zooms around mouse cursor
-    //        Ctrl+scroll also works for compatibility
+    // Scroll wheel behaviour (industry-standard pixel-art app conventions):
+    //   • Plain scroll          → pan the canvas (never changes layout)
+    //   • Ctrl + scroll         → zoom around the cursor
+    //   • Trackpad pinch        → zoom (SDL maps pinch → Ctrl + wheel)
+    //
+    // Keeping zoom behind Ctrl prevents accidental layout jumps caused by
+    // fitCanvas toggling while the user just wants to scroll past the canvas.
     // ---------------------------------------------------------------
     if ((canvasHovered || windowHovered) && io.MouseWheel != 0.0f) {
-        // Mouse position in screen space, relative to canvas origin BEFORE zoom
-        const float zoomFactor  = (io.MouseWheel > 0.0f) ? 1.1f : (1.0f / 1.1f);
-        const float oldScale    = userCanvasScale;
-        const float newScale    = std::clamp(oldScale * zoomFactor, 0.05f, 40.0f);
+        if (io.KeyCtrl) {
+            // ---------------------------------------------------------
+            // Ctrl + scroll = zoom towards cursor
+            // ---------------------------------------------------------
+            const float zoomFactor = (io.MouseWheel > 0.0f) ? 1.1f : (1.0f / 1.1f);
+            const float oldScale   = userCanvasScale;
+            const float newScale   = std::clamp(oldScale * zoomFactor, 0.05f, 40.0f);
 
-        // Zoom towards mouse: adjust panOffset so the pixel under the cursor stays fixed
-        // mousePos relative to the centered canvas origin
-        const ImVec2 regionMin  = ImGui::GetItemRectMin();
-        const ImVec2 regionSize = ImGui::GetItemRectSize();
-        const ImVec2 center     = ImVec2(regionMin.x + regionSize.x * 0.5f,
-                                         regionMin.y + regionSize.y * 0.5f);
+            // Keep the canvas pixel under the cursor stationary.
+            const ImVec2 regionMin  = ImGui::GetItemRectMin();
+            const ImVec2 regionSize = ImGui::GetItemRectSize();
+            const ImVec2 center     = ImVec2(regionMin.x + regionSize.x * 0.5f,
+                                             regionMin.y + regionSize.y * 0.5f);
+            const ImVec2 toMouse    = ImVec2(mousePos.x - center.x - panOffset.x,
+                                             mousePos.y - center.y - panOffset.y);
 
-        // Vector from canvas center to mouse
-        const ImVec2 toMouse = ImVec2(mousePos.x - center.x - panOffset.x,
-                                      mousePos.y - center.y - panOffset.y);
+            panOffset.x -= toMouse.x * (newScale / oldScale - 1.0f);
+            panOffset.y -= toMouse.y * (newScale / oldScale - 1.0f);
+            scrollOffset = panOffset;
 
-        // Adjust pan so the pixel under the cursor stays fixed
-        panOffset.x -= toMouse.x * (newScale / oldScale - 1.0f);
-        panOffset.y -= toMouse.y * (newScale / oldScale - 1.0f);
-        scrollOffset = panOffset;
-
-        userCanvasScale = newScale;
-        // Disable fitCanvas when user explicitly zooms
-        fitCanvas = false;
-        io.WantCaptureMouse = true; // prevent ImGui from handling this wheel event
+            userCanvasScale = newScale;
+            fitCanvas       = false;   // explicit zoom disables fit-to-window
+            io.WantCaptureMouse = true;
+        } else {
+            // ---------------------------------------------------------
+            // Plain scroll = pan the canvas
+            // Scroll up   → canvas shifts up   (see more of the top)
+            // Scroll down → canvas shifts down (see more of the bottom)
+            // Horizontal scroll (trackpad two-finger swipe) pans X.
+            // ---------------------------------------------------------
+            constexpr float kPanSpeed = 32.0f;
+            panOffset.x   -= io.MouseWheelH * kPanSpeed;
+            panOffset.y   -= io.MouseWheel  * kPanSpeed;
+            scrollOffset   = panOffset;
+            io.WantCaptureMouse = true;
+        }
     }
 
     // ---------------------------------------------------------------
@@ -3181,6 +3237,34 @@ void PixelPaintView::DrawFilterTab()
         }
         ImGui::TextDisabled("Redraws the image using block-sampled shapes.");
     }
+
+    ImGui::Spacing();
+
+    // ----------------------------------------------------------------
+    // Depth Map Layer
+    // ----------------------------------------------------------------
+    if (ImGui::CollapsingHeader("Depth Map Layer")) {
+        ImGui::TextDisabled("Generates a depth map from canvas luma\nand adds it as a new layer.");
+        ImGui::Spacing();
+
+        // Color mode
+        ImGui::Text("Color mode:");
+        ImGui::RadioButton("Grayscale##dm",   &depthMapColorMode, 0);
+        ImGui::SetItemTooltip("Black = far / dark, White = near / bright");
+        ImGui::RadioButton("False Color##dm", &depthMapColorMode, 1);
+        ImGui::SetItemTooltip("Spectral ramp: violet → blue → teal → green → amber → pink");
+        ImGui::RadioButton("Warm Tone##dm",   &depthMapColorMode, 2);
+        ImGui::SetItemTooltip("Classic pixel-art look: dark purple → magenta → orange → warm yellow");
+
+        ImGui::Spacing();
+        ImGui::Checkbox("Invert depth##dm", &depthMapInvert);
+        ImGui::SetItemTooltip("Swap near/far: bright pixels become deep, dark become shallow");
+
+        ImGui::Spacing();
+        if (ImGui::Button("Generate as New Layer##dm", ImVec2(-1, 0))) {
+            GenerateDepthMapLayer();
+        }
+    }
 }
 
 // FILES TAB - File I/O operations
@@ -3649,9 +3733,12 @@ void PixelPaintView::Draw(std::string_view label)
     }
 
     const float statusBarHeight = 30.0f;
-    const bool  isLandscape     = screenSize.x > screenSize.y;
-    const bool  overlayToolbar  = isLandscape;
-    const bool  overlayPanels   = fitCanvas;
+    const bool isLandscape    = screenSize.x > screenSize.y;
+    const bool overlayToolbar = isLandscape;
+    // Right panel is ALWAYS docked — never overlay.
+    // Decoupling it from fitCanvas prevents the panel from jumping position
+    // whenever the user zooms or scrolls and fitCanvas flips to false.
+    const bool overlayPanels  = false;
     // Unified toolbar width — 44 px when docked, 0 when floating overlay.
     const float leftToolbarWidth = overlayToolbar ? 0.0f : 44.0f;
     const float toolbarPaddingX  = isLandscape ? 12.0f : 0.0f;
@@ -3727,25 +3814,18 @@ void PixelPaintView::Draw(std::string_view label)
         ImGui::EndChild();
     }
 
-    // RIGHT PANEL — overlay (fit mode) or docked (normal mode), collapsible.
+    // RIGHT PANEL — always docked to the right of the canvas.
     if (!rightPanelCollapsed) {
-        ImVec2 panelPos;
-        if (overlayPanels) {
-            // Overlay: float the panel over the canvas anchored to the right edge.
-            panelPos = ImVec2(screenSize.x - rightPanelWidth - kResizerW, topPadding);
-            ImGui::SetCursorScreenPos(panelPos);
-        } else {
-            // Docked: placed immediately after the canvas in the layout flow.
-            ImGui::SameLine(0.f, kResizerW);
-            ImGui::SetCursorPosY(topPadding);
-            panelPos = ImGui::GetCursorScreenPos();
-        }
+        // Docked: placed immediately after the canvas in the layout flow.
+        ImGui::SameLine(0.f, kResizerW);
+        ImGui::SetCursorPosY(topPadding);
+        const ImVec2 panelPos = ImGui::GetCursorScreenPos();
 
         DrawRightPanel();
 
-        // ---- Resize handle — active in BOTH overlay and docked modes ----
-        // Placed at the left seam of the panel using screen-space coords so it
-        // sits on top of both the canvas and the panel borders.
+        // ---- Drag-to-resize handle ----
+        // Uses screen-space placement so it sits on the seam between the
+        // canvas child and the panel child, intercepting mouse events cleanly.
         const float handleX = panelPos.x - kResizerW * 0.5f - 2.0f;
         ImGui::SetCursorScreenPos(ImVec2(handleX, topPadding));
         ImGui::InvisibleButton("RightPanelResizer",
@@ -3759,15 +3839,6 @@ void PixelPaintView::Draw(std::string_view label)
         }
         if (ImGui::IsItemHovered())
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-
-        // Visual divider line on the left edge of the panel (overlay mode only;
-        // docked mode relies on the child border of the panel itself).
-        if (overlayPanels) {
-            ImGui::GetWindowDrawList()->AddLine(
-                ImVec2(panelPos.x - 1.0f, topPadding),
-                ImVec2(panelPos.x - 1.0f, topPadding + contentHeight - 4.0f),
-                ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
-        }
     }
 
     #if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
