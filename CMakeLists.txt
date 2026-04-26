@@ -164,10 +164,27 @@ endif()
 
 # Main executable
 if(PLATFORM_MACOS OR PLATFORM_IOS)
-    # Use .mm extension for Objective-C++ on Apple platforms
-    # Copy PixelPaintView.cpp to .mm for Metal support
-    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/PixelPaintView.cpp
-                   ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm COPYONLY)
+    # Use .mm extension for Objective-C++ on Apple platforms.
+    # configure_file only runs at cmake-configure time, so edits to the .cpp
+    # would not be picked up until the next reconfigure.  We use:
+    #   1. execute_process  — seeds the .mm right now so it exists immediately.
+    #   2. add_custom_command — tracks the .cpp as a dependency so the build
+    #      system re-copies (and recompiles) whenever the source changes,
+    #      without requiring a manual cmake reconfigure.
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/PixelPaintView.cpp
+                ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
+    )
+    add_custom_command(
+        OUTPUT  ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_CURRENT_SOURCE_DIR}/src/PixelPaintView.cpp
+                ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/PixelPaintView.cpp
+        COMMENT "Syncing PixelPaintView.cpp -> PixelPaintView.mm"
+        VERBATIM
+    )
 
     set(APPLE_SOURCES
         ${IMGUI_FILE_DIALOG_SOURCES}
@@ -175,6 +192,7 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         src/export/MeshExporter.cpp
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
+        src/core/AnimationTimeline.cpp
         src/tools/DrawingAlgorithms.cpp
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
@@ -201,6 +219,7 @@ else()
         src/export/MeshExporter.cpp
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
+        src/core/AnimationTimeline.cpp
         src/tools/DrawingAlgorithms.cpp
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp

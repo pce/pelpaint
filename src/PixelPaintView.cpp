@@ -302,6 +302,8 @@ void PixelPaintView::ResizeCanvas(int newWidth, int newHeight)
     canvas_.Resize(newWidth, newHeight);
     SyncDimsFromCanvas();
     canvasSize = ImVec2(static_cast<float>(canvasWidth), static_cast<float>(canvasHeight));
+    timeline_.Resize(static_cast<std::uint32_t>(canvasWidth),
+                     static_cast<std::uint32_t>(canvasHeight));
     textureNeedsUpdate = true;
 }
 
@@ -2155,48 +2157,48 @@ void PixelPaintView::DrawToolbar()
         { DrawTool::BucketFill, "K", "Bucket Fill" }
     };
 
+    const int toolCount = static_cast<int>(sizeof(toolButtons) / sizeof(toolButtons[0]));
+
+    // Adaptive button sizing: distribute available height evenly, clamped to a
+    // sane range so buttons never become too tiny or comically large.
+    const ImVec2 avail   = ImGui::GetContentRegionAvail();
+    const float  spacing = ImGui::GetStyle().ItemSpacing.y;
+    float buttonH = std::floor((avail.y - spacing * (toolCount - 1)) / toolCount);
+    buttonH = std::max(22.f, std::min(40.f, buttonH));
+    // Width fills the child minus a small inset so the border isn't clipped.
+    const float buttonW = std::max(22.f, avail.x - 4.f);
+
     ImGui::BeginGroup();
-    {
-        float buttonSize = 40.0f;
-        int toolCount = static_cast<int>(sizeof(toolButtons) / sizeof(toolButtons[0]));
+    for (int i = 0; i < toolCount; ++i) {
+        const ToolButton& entry = toolButtons[i];
+        const DrawTool    tool  = entry.tool;
+        const bool        selected = (currentTool == tool);
 
-        for (int i = 0; i < toolCount; ++i) {
-            const ToolButton& entry = toolButtons[i];
-            DrawTool tool = entry.tool;
-            bool selected = (currentTool == tool);
+        if (selected)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.6f, 1.0f, 1.0f));
 
-            if (selected) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.6f, 1.0f, 1.0f));
-            }
-
-            if (ImGui::Button(entry.label, ImVec2(buttonSize, buttonSize))) {
-                if (tool == DrawTool::RectangleSelect || tool == DrawTool::CircleSelect) {
-                    if (currentTool == tool) {
-                        ClearSelection();
-                        currentTool = DrawTool::Pencil;
-                    } else {
-                        currentTool = tool;
-                    }
+        if (ImGui::Button(entry.label, ImVec2(buttonW, buttonH))) {
+            if (tool == DrawTool::RectangleSelect || tool == DrawTool::CircleSelect) {
+                if (currentTool == tool) {
+                    ClearSelection();
+                    currentTool = DrawTool::Pencil;
                 } else {
-                    if (currentSelection.isActive) {
-                        ClearSelection();
-                    }
                     currentTool = tool;
                 }
-
-                if (tool == DrawTool::Clone) {
-                    cloneSourceSet = false;
-                }
+            } else {
+                if (currentSelection.isActive)
+                    ClearSelection();
+                currentTool = tool;
             }
-
-            if (selected) {
-                ImGui::PopStyleColor();
-            }
-
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", entry.name);
-            }
+            if (tool == DrawTool::Clone)
+                cloneSourceSet = false;
         }
+
+        if (selected)
+            ImGui::PopStyleColor();
+
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", entry.name);
     }
     ImGui::EndGroup();
 }
@@ -2714,13 +2716,20 @@ void PixelPaintView::DrawStatusBar()
         currentColor.a
     );
 
-    // Collapse/Expand button on the right
+    // Collapse/Expand right panel + Animation panel toggle on the right
     ImGui::SameLine();
     float availWidth = ImGui::GetContentRegionAvail().x;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availWidth - 30.0f);
-    if (ImGui::Button(rightPanelCollapsed ? "Show" : "Hide", ImVec2(40, 0))) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + availWidth - 85.0f);
+    if (showAnimPanel_)
+        ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(40, 120, 200, 200));
+    if (ImGui::Button("Anim##toggleanim", ImVec2(40, 0)))
+        showAnimPanel_ = !showAnimPanel_;
+    if (showAnimPanel_)
+        ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle animation timeline panel");
+    ImGui::SameLine();
+    if (ImGui::Button(rightPanelCollapsed ? "Show" : "Hide", ImVec2(40, 0)))
         rightPanelCollapsed = !rightPanelCollapsed;
-    }
 }
 
 // RIGHT PANEL WITH TABS
@@ -3605,19 +3614,63 @@ void PixelPaintView::Draw(std::string_view label)
         textureNeedsUpdate = true;
     }
 
+    // --- Animation timeline playback ---
+    {
+        timeline_.Update(ImGui::GetIO().DeltaTime);
+
+        const auto curState = timeline_.State();
+
+        // When transitioning out of Playing, re-composite from layers.
+        if (animPrevState_ == core::AnimationTimeline::PlaybackState::Playing &&
+            curState      != core::AnimationTimeline::PlaybackState::Playing)
+        {
+            canvas_.SetDirty();
+        }
+        animPrevState_ = curState;
+
+        // During playback, push the current animation frame into the composite texture.
+        if (curState == core::AnimationTimeline::PlaybackState::Playing) {
+            const int curAnimFrame = timeline_.CurrentFrame();
+            if (curAnimFrame != animLastFrame_) {
+                animLastFrame_ = curAnimFrame;
+                const auto& frameSurf = timeline_.Frame(curAnimFrame).surface;
+                auto& compSurf = canvas_.CompositeSurface();
+                for (std::uint32_t ty = 0; ty < frameSurf.TilesY(); ++ty) {
+                    for (std::uint32_t tx = 0; tx < frameSurf.TilesX(); ++tx) {
+                        auto src = frameSurf.TilePixels(tx, ty);
+                        if (src.empty()) continue;
+                        auto dst = compSurf.TilePixelsMutable(tx, ty);
+                        std::copy(src.begin(), src.end(), dst.begin());
+                    }
+                }
+                textureNeedsUpdate = true;
+            }
+        }
+    }
+
     const float statusBarHeight = 30.0f;
-    const bool isLandscape = screenSize.x > screenSize.y;
-    const bool overlayToolbar = isLandscape;
-    const bool overlayPanels = fitCanvas;
-    const float leftToolbarWidth = overlayToolbar ? 0.0f : 50.0f;
-    const float toolbarPaddingX = isLandscape ? 12.0f : 0.0f;
-    float topPadding = 8.0f;
+    const bool  isLandscape     = screenSize.x > screenSize.y;
+    const bool  overlayToolbar  = isLandscape;
+    const bool  overlayPanels   = fitCanvas;
+    // Unified toolbar width — 44 px when docked, 0 when floating overlay.
+    const float leftToolbarWidth = overlayToolbar ? 0.0f : 44.0f;
+    const float toolbarPaddingX  = isLandscape ? 12.0f : 0.0f;
+    float topPadding    = 8.0f;
     float bottomPadding = 8.0f;
 #if TARGET_OS_IOS || TARGET_OS_TV
-    topPadding = 24.0f;
+    topPadding    = 24.0f;
     bottomPadding = 20.0f;
 #endif
-    const float contentHeight = screenSize.y - statusBarHeight - topPadding - bottomPadding;
+    const float animPanelH    = showAnimPanel_ ? animPanelHeight_ : 0.f;
+    const float contentHeight = screenSize.y - statusBarHeight - topPadding - bottomPadding - animPanelH;
+
+    // Keep right-panel width within a safe range so it can never push
+    // canvasAreaWidth to zero (which causes the panel to flip to x=0).
+    const float kMinCanvasW = 200.0f;
+    const float kResizerW   = 6.0f;
+    rightPanelWidth = std::max(250.0f,
+        std::min(rightPanelWidth,
+                 screenSize.x - leftToolbarWidth - kMinCanvasW - kResizerW * 2.0f));
 
     ImGui::SetCursorPos(ImVec2(0.0f, topPadding));
 
@@ -3636,8 +3689,11 @@ void PixelPaintView::Draw(std::string_view label)
     // - Never scrolls (ImGui scroll fully disabled)
     // - Canvas is always centered; pan/zoom handled inside DrawCanvasView
     // - Footer is placed AFTER this block at a fixed screen position
-    const float panelWidth    = (!rightPanelCollapsed && !overlayPanels) ? (rightPanelWidth + 6.0f) : 0.0f;
-    const float canvasAreaWidth = screenSize.x - leftToolbarWidth - panelWidth - 6.0f;
+    const float reservedPanelW  = (!rightPanelCollapsed && !overlayPanels)
+                                  ? (rightPanelWidth + kResizerW) : 0.0f;
+    // Guard against ever going below kMinCanvasW so the panel can't flip left.
+    const float canvasAreaWidth = std::max(kMinCanvasW,
+        screenSize.x - leftToolbarWidth - reservedPanelW - kResizerW);
     ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, contentHeight), false,
         ImGuiWindowFlags_NoScrollbar  |
         ImGuiWindowFlags_NoScrollWithMouse |
@@ -3660,54 +3716,57 @@ void PixelPaintView::Draw(std::string_view label)
     }
     ImGui::EndChild();
 
-    // Floating toolbar overlay in landscape (left padded, vertically centered)
+    // Floating toolbar overlay in landscape.
+    // Give it the full contentHeight so DrawToolbar() can distribute all
+    // buttons evenly without any hardcoded tool-count arithmetic here.
     if (overlayToolbar) {
-        const float buttonSize = 30.0f;
-        const int toolCount = 9;
-        const float spacingY = ImGui::GetStyle().ItemSpacing.y;
-        const float toolbarHeight = (toolCount * buttonSize) + ((toolCount - 1) * spacingY);
-        const float toolbarY = topPadding + std::max(0.0f, (contentHeight - toolbarHeight) * 0.5f);
-
-        ImGui::SetCursorScreenPos(ImVec2(toolbarPaddingX, toolbarY));
-        ImGui::BeginChild("FloatingToolbar", ImVec2(40.0f, toolbarHeight + 2.0f), true, ImGuiWindowFlags_NoScrollbar);
-        {
-            DrawToolbar();
-        }
+        ImGui::SetCursorScreenPos(ImVec2(toolbarPaddingX, topPadding));
+        ImGui::BeginChild("FloatingToolbar", ImVec2(44.0f, contentHeight), true,
+            ImGuiWindowFlags_NoScrollbar);
+        DrawToolbar();
         ImGui::EndChild();
     }
 
-    // RIGHT PANEL - overlay in Fit mode, docked otherwise (collapsible)
+    // RIGHT PANEL — overlay (fit mode) or docked (normal mode), collapsible.
     if (!rightPanelCollapsed) {
         ImVec2 panelPos;
         if (overlayPanels) {
-            panelPos = ImVec2(screenSize.x - rightPanelWidth - 6.0f, topPadding);
+            // Overlay: float the panel over the canvas anchored to the right edge.
+            panelPos = ImVec2(screenSize.x - rightPanelWidth - kResizerW, topPadding);
             ImGui::SetCursorScreenPos(panelPos);
         } else {
-            ImGui::SameLine();
+            // Docked: placed immediately after the canvas in the layout flow.
+            ImGui::SameLine(0.f, kResizerW);
             ImGui::SetCursorPosY(topPadding);
             panelPos = ImGui::GetCursorScreenPos();
         }
 
         DrawRightPanel();
 
+        // ---- Resize handle — active in BOTH overlay and docked modes ----
+        // Placed at the left seam of the panel using screen-space coords so it
+        // sits on top of both the canvas and the panel borders.
+        const float handleX = panelPos.x - kResizerW * 0.5f - 2.0f;
+        ImGui::SetCursorScreenPos(ImVec2(handleX, topPadding));
+        ImGui::InvisibleButton("RightPanelResizer",
+            ImVec2(kResizerW + 4.0f, contentHeight - 4.0f));
+
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            const float delta = ImGui::GetIO().MouseDelta.x;
+            rightPanelWidth = std::max(250.0f,
+                std::min(rightPanelWidth - delta,
+                         screenSize.x - leftToolbarWidth - kMinCanvasW - kResizerW * 2.0f));
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+
+        // Visual divider line on the left edge of the panel (overlay mode only;
+        // docked mode relies on the child border of the panel itself).
         if (overlayPanels) {
-            ImVec2 dividerStart = ImVec2(panelPos.x - 5.0f, panelPos.y);
-            ImVec2 dividerEnd = ImVec2(panelPos.x - 5.0f, panelPos.y + contentHeight - 6.0f);
-
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            drawList->AddLine(dividerStart, dividerEnd, ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
-
-            ImGui::SetCursorScreenPos(ImVec2(panelPos.x - 8.0f, panelPos.y));
-            ImGui::InvisibleButton("RightPanelResizer", ImVec2(10.0f, contentHeight - 6.0f));
-
-            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                float delta = ImGui::GetIO().MouseDelta.x;
-                rightPanelWidth = std::max(250.0f, std::min(600.0f, rightPanelWidth - delta));
-            }
-
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-            }
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(panelPos.x - 1.0f, topPadding),
+                ImVec2(panelPos.x - 1.0f, topPadding + contentHeight - 4.0f),
+                ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
         }
     }
 
@@ -3787,6 +3846,13 @@ void PixelPaintView::Draw(std::string_view label)
         ImGuiFileDialog::Instance()->Close();
     }
 #endif
+
+    // ANIMATION TIMELINE PANEL — docked above the status bar
+    if (showAnimPanel_) {
+        ImGui::SetCursorScreenPos(ImVec2(0.f,
+            screenSize.y - statusBarHeight - bottomPadding - animPanelHeight_));
+        DrawAnimationTimelinePanel();
+    }
 
     // BOTTOM STATUS BAR — always sticky at the very bottom of the window.
     // Use SetCursorScreenPos so it is independent of the layout above.
@@ -4058,6 +4124,309 @@ void PixelPaintView::DrawParticleBurstUI() {
     if (ImGui::Button("Bake Particle Burst to Layer", ImVec2(-1, 0))) {
         BakeParticleBurst();
     }
+}
+
+// =============================================================================
+// Animation Timeline helpers
+// =============================================================================
+
+void PixelPaintView::CaptureCanvasToFrame(int frameIndex)
+{
+    if (frameIndex < 0 || frameIndex >= timeline_.FrameCount()) return;
+
+    // Ensure the composite is up-to-date.
+    canvas_.Composite();
+    const core::ImageSurface& src = canvas_.CompositeSurface();
+    core::AnimationFrame& frame = timeline_.Frame(frameIndex);
+
+    // Resize frame surface if canvas dimensions changed.
+    if (frame.surface.Width()  != static_cast<std::uint32_t>(canvasWidth) ||
+        frame.surface.Height() != static_cast<std::uint32_t>(canvasHeight))
+    {
+        frame.surface.Resize(static_cast<std::uint32_t>(canvasWidth),
+                             static_cast<std::uint32_t>(canvasHeight));
+    }
+
+    // Copy tile by tile.
+    for (std::uint32_t ty = 0; ty < src.TilesY(); ++ty) {
+        for (std::uint32_t tx = 0; tx < src.TilesX(); ++tx) {
+            auto srcSpan = src.TilePixels(tx, ty);
+            if (srcSpan.empty()) continue;
+            auto dstSpan = frame.surface.TilePixelsMutable(tx, ty);
+            std::copy(srcSpan.begin(), srcSpan.end(), dstSpan.begin());
+        }
+    }
+}
+
+void PixelPaintView::LoadFrameToCanvas(int frameIndex)
+{
+    if (frameIndex < 0 || frameIndex >= timeline_.FrameCount()) return;
+
+    const core::AnimationFrame& frame = timeline_.Frame(frameIndex);
+    const core::ImageView view = frame.surface.Flatten();
+    if (!view.valid()) return;
+
+    Layer* activeLayer = canvas_.ActiveLayer();
+    if (!activeLayer) return;
+
+    const std::size_t total = static_cast<std::size_t>(canvasWidth) * canvasHeight;
+    const auto* srcPx = reinterpret_cast<const Pixel*>(view.data);
+
+    activeLayer->pixelData.resize(total);
+    std::copy(srcPx, srcPx + total, activeLayer->pixelData.begin());
+
+    canvas_.SetDirty();
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::DrawAnimationTimelinePanel()
+{
+    using PlayState = core::AnimationTimeline::PlaybackState;
+
+    const float panW = ImGui::GetIO().DisplaySize.x;
+    ImGui::BeginChild("AnimTimelinePanel", ImVec2(panW, animPanelHeight_), true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+    const bool isPlaying = (timeline_.State() == PlayState::Playing);
+
+    // -----------------------------------------------------------------------
+    // Row 1 — Transport + FPS + preset + frame info + frame management
+    // -----------------------------------------------------------------------
+
+    // |<< first frame
+    if (ImGui::Button("|<<##anim", ImVec2(30, 22))) {
+        const bool wasPlaying = isPlaying;
+        timeline_.Stop();
+        timeline_.SetCurrentFrame(0);
+        if (!wasPlaying) LoadFrameToCanvas(0);
+        canvas_.SetDirty();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("First frame");
+    ImGui::SameLine();
+
+    // << previous
+    if (ImGui::Button("<<##anim", ImVec2(28, 22))) {
+        const int prev = std::max(0, timeline_.CurrentFrame() - 1);
+        timeline_.SetCurrentFrame(prev);
+        if (!isPlaying) LoadFrameToCanvas(prev);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Previous frame");
+    ImGui::SameLine();
+
+    // Play / Pause
+    if (ImGui::Button(isPlaying ? " || ##anim" : " |> ##anim", ImVec2(44, 22))) {
+        if (isPlaying) {
+            timeline_.Pause();
+            canvas_.SetDirty();
+        } else {
+            timeline_.Play();
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(isPlaying ? "Pause" : "Play");
+    ImGui::SameLine();
+
+    // Stop
+    if (ImGui::Button("[  ]##anim", ImVec2(36, 22))) {
+        timeline_.Stop();
+        canvas_.SetDirty();
+        LoadFrameToCanvas(timeline_.CurrentFrame());
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop and rewind");
+    ImGui::SameLine();
+
+    // >> next
+    if (ImGui::Button(">>##anim", ImVec2(28, 22))) {
+        const int next = std::min(timeline_.FrameCount() - 1, timeline_.CurrentFrame() + 1);
+        timeline_.SetCurrentFrame(next);
+        if (!isPlaying) LoadFrameToCanvas(next);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next frame");
+    ImGui::SameLine();
+
+    // >>| last frame
+    if (ImGui::Button(">>|##anim", ImVec2(30, 22))) {
+        timeline_.Stop();
+        const int last = timeline_.FrameCount() - 1;
+        timeline_.SetCurrentFrame(last);
+        LoadFrameToCanvas(last);
+        canvas_.SetDirty();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Last frame");
+    ImGui::SameLine();
+
+    // Loop toggle (highlighted when active)
+    {
+        bool loop = timeline_.Looping();
+        if (loop)
+            ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(40, 120, 200, 200));
+        if (ImGui::Button("Loop##anim", ImVec2(40, 22)))
+            timeline_.SetLooping(!loop);
+        if (loop)
+            ImGui::PopStyleColor();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle looping");
+    ImGui::SameLine();
+
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+
+    // FPS input
+    float fps = timeline_.FPS();
+    ImGui::SetNextItemWidth(52.f);
+    if (ImGui::InputFloat("fps##anim", &fps, 0.f, 0.f, "%.1f")) {
+        if (fps > 0.f) {
+            timeline_.SetFPS(fps);
+            animPresetIdx_ = 0; // custom
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Frames per second");
+    ImGui::SameLine();
+
+    // Preset combo
+    static const char* kPresetNames[] = {
+        "Custom",
+        "Slide 1fps", "Idle 2fps", "Slow 4fps", "Classic 8fps", "Smooth 12fps",
+        "GIF 10fps",  "GIF 15fps", "Film 24fps", "Video 30fps", "HD 60fps"
+    };
+    ImGui::SetNextItemWidth(120.f);
+    if (ImGui::BeginCombo("##animpreset", kPresetNames[animPresetIdx_])) {
+        for (int i = 0; i < static_cast<int>(core::AnimationPreset::Count_); ++i) {
+            const bool sel = (animPresetIdx_ == i);
+            if (ImGui::Selectable(kPresetNames[i], sel)) {
+                animPresetIdx_ = i;
+                if (i > 0)
+                    timeline_.SetFPS(core::PresetToFPS(static_cast<core::AnimationPreset>(i)));
+            }
+            if (sel) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("FPS preset");
+    ImGui::SameLine();
+
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+
+    // Frame count / total duration
+    ImGui::Text(" Fr %d/%d  %.2fs ",
+        timeline_.CurrentFrame() + 1,
+        timeline_.FrameCount(),
+        timeline_.TotalDuration());
+    ImGui::SameLine();
+
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+
+    // Frame management actions
+    if (ImGui::SmallButton("+##newf")) {
+        const int newIdx = timeline_.AddFrame();
+        timeline_.SetCurrentFrame(newIdx);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add blank frame");
+    ImGui::SameLine();
+
+    if (ImGui::SmallButton("Dup##f")) {
+        const int newIdx = timeline_.DuplicateFrame(timeline_.CurrentFrame());
+        timeline_.SetCurrentFrame(newIdx);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Duplicate current frame");
+    ImGui::SameLine();
+
+    if (ImGui::SmallButton("Del##f")) {
+        if (timeline_.FrameCount() > 1) {
+            timeline_.RemoveFrame(timeline_.CurrentFrame());
+            LoadFrameToCanvas(timeline_.CurrentFrame());
+        }
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete current frame");
+    ImGui::SameLine();
+
+    if (ImGui::SmallButton("<##mf")) {
+        const int idx = timeline_.CurrentFrame();
+        if (idx > 0) timeline_.MoveFrame(idx, idx - 1);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move frame left");
+    ImGui::SameLine();
+
+    if (ImGui::SmallButton(">##mf")) {
+        const int idx = timeline_.CurrentFrame();
+        if (idx < timeline_.FrameCount() - 1) timeline_.MoveFrame(idx, idx + 1);
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Move frame right");
+    ImGui::SameLine();
+
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+
+    // Capture / Edit buttons
+    if (ImGui::Button("Capture##anim", ImVec2(0, 22)))
+        CaptureCanvasToFrame(timeline_.CurrentFrame());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Snapshot composited canvas into current frame");
+    ImGui::SameLine();
+
+    if (ImGui::Button("Edit##anim", ImVec2(0, 22)))
+        LoadFrameToCanvas(timeline_.CurrentFrame());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Load current frame into active layer for editing");
+
+    // -----------------------------------------------------------------------
+    // Row 2 — Scrollable frame strip
+    // -----------------------------------------------------------------------
+    ImGui::BeginChild("##framestrip", ImVec2(0.f, 0.f), false,
+        ImGuiWindowFlags_HorizontalScrollbar);
+
+    const int frameCount = timeline_.FrameCount();
+    const int curFrame   = timeline_.CurrentFrame();
+    constexpr float kThumbW = 48.f;
+    constexpr float kThumbH = 34.f;
+
+    for (int i = 0; i < frameCount; ++i) {
+        ImGui::PushID(i);
+
+        const bool isCur = (i == curFrame);
+        if (isCur) {
+            ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(50, 140, 240, 200));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(80, 160, 255, 220));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(110, 180, 255, 255));
+        }
+
+        char lbl[16];
+        std::snprintf(lbl, sizeof(lbl), "%d", i + 1);
+        if (ImGui::Button(lbl, ImVec2(kThumbW, kThumbH))) {
+            timeline_.SetCurrentFrame(i);
+            if (timeline_.State() != PlayState::Playing)
+                LoadFrameToCanvas(i);
+        }
+
+        if (isCur) {
+            ImGui::PopStyleColor(3);
+            ImGui::SetScrollHereX(0.5f);
+        }
+
+        if (ImGui::IsItemHovered()) {
+            const float delay = timeline_.FrameDelay(i);
+            ImGui::SetTooltip("Frame %d  %.3fs\n%s",
+                i + 1, delay, timeline_.Frame(i).label.c_str());
+        }
+
+        // Right-click: edit per-frame delay override
+        if (ImGui::BeginPopupContextItem("##fdlay")) {
+            ImGui::Text("Frame %d delay override", i + 1);
+            ImGui::Separator();
+            float del = timeline_.Frame(i).delay;
+            ImGui::SetNextItemWidth(90.f);
+            if (ImGui::InputFloat("Delay s (0=auto)", &del, 0.f, 0.f, "%.3f")) {
+                if (del >= 0.f) timeline_.Frame(i).delay = del;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("0 = use global FPS");
+            ImGui::EndPopup();
+        }
+
+        ImGui::SameLine();
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild(); // frame strip
+    ImGui::EndChild(); // AnimTimelinePanel
 }
 
 } // namespace pelpaint

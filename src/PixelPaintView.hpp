@@ -16,6 +16,7 @@
 #include "core/Types.hpp"
 #include "core/Canvas.hpp"
 #include "core/UndoHistory.hpp"
+#include "core/AnimationTimeline.hpp"
 #include "ColorPalettes.hpp"
 #include "export/ImageExporter.hpp"
 
@@ -77,6 +78,7 @@ public:
 private:
     // source of truth for pixel data
     Canvas canvas_{ 128, 128 };
+    core::AnimationTimeline timeline_{ 128, 128 };
     // Convenience aliases kept for the staged migration; delegate to canvas_.
     // TODO Stage-3: replace all canvasWidth / canvasHeight usages in .cpp with
     //               canvas_.Width() / canvas_.Height() and remove these.
@@ -261,7 +263,18 @@ private:
     bool                  shapeRedrawFilterUsePalette = false;
 
     std::array<bool, 64>  shapeRedrawCustomMap = {};
-    // ==================================================================== 
+    // ====================================================================
+    // Animation timeline
+    // ====================================================================
+
+    bool  showAnimPanel_   = false;
+    float animPanelHeight_ = 120.f;
+    int   animPresetIdx_   = 0;       // index into AnimationPreset enum
+    int   animLastFrame_   = -1;      // frame index last rendered to texture
+    core::AnimationTimeline::PlaybackState animPrevState_
+        = core::AnimationTimeline::PlaybackState::Stopped;
+
+    // ====================================================================
     // Pixel Generator
     // ====================================================================
     int  ppgMethod     = 0;    // 0=Noise 1=Cellular 2=L-System 3=Pattern
@@ -458,6 +471,9 @@ private:
     void DrawFilterTab();
     void DrawFilesTab();
     void DrawLayersTab();
+    void DrawAnimationTimelinePanel();
+    void CaptureCanvasToFrame(int frameIndex);
+    void LoadFrameToCanvas(int frameIndex);
     void DrawProceduralGenTab();
     void DrawParticleBurstUI();
     void StampPixelPerfectToLayer(const tools::PixelPerfectGenerator::PixelPerfect& art);

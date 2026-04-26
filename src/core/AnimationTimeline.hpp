@@ -1,0 +1,166 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "ImageSurface.hpp"
+
+namespace pelpaint::core {
+
+// ---------------------------------------------------------------------------
+// AnimationFrame
+//
+// A single frame in an animation sequence.
+//   • surface  — pixel content (composited flat image, same W×H as the canvas).
+//   • delay    — per-frame duration override in seconds.
+//               0.0 = use the timeline's global FPS.
+//   • label    — optional display name for the strip UI.
+// ---------------------------------------------------------------------------
+struct AnimationFrame {
+    ImageSurface surface;
+    float        delay = 0.f;
+    std::string  label;
+};
+
+// ---------------------------------------------------------------------------
+// AnimationPreset — common FPS values with descriptive names.
+// ---------------------------------------------------------------------------
+enum class AnimationPreset : int {
+    Custom         = 0,
+    Slideshow_1fps,
+    Sprite_2fps,
+    Sprite_4fps,
+    Sprite_8fps,
+    Sprite_12fps,
+    GIF_10fps,
+    GIF_15fps,
+    Film_24fps,
+    Video_30fps,
+    Video_60fps,
+    Count_          // sentinel — keep last
+};
+
+[[nodiscard]] constexpr float PresetToFPS(AnimationPreset p) noexcept {
+    switch (p) {
+        case AnimationPreset::Slideshow_1fps:  return  1.f;
+        case AnimationPreset::Sprite_2fps:     return  2.f;
+        case AnimationPreset::Sprite_4fps:     return  4.f;
+        case AnimationPreset::Sprite_8fps:     return  8.f;
+        case AnimationPreset::Sprite_12fps:    return 12.f;
+        case AnimationPreset::GIF_10fps:       return 10.f;
+        case AnimationPreset::GIF_15fps:       return 15.f;
+        case AnimationPreset::Film_24fps:      return 24.f;
+        case AnimationPreset::Video_30fps:     return 30.f;
+        case AnimationPreset::Video_60fps:     return 60.f;
+        default:                               return 12.f;
+    }
+}
+
+[[nodiscard]] constexpr const char* PresetName(AnimationPreset p) noexcept {
+    switch (p) {
+        case AnimationPreset::Custom:          return "Custom";
+        case AnimationPreset::Slideshow_1fps:  return "Slideshow  (1 fps)";
+        case AnimationPreset::Sprite_2fps:     return "Sprite Idle (2 fps)";
+        case AnimationPreset::Sprite_4fps:     return "Sprite Slow (4 fps)";
+        case AnimationPreset::Sprite_8fps:     return "Sprite Classic (8 fps)";
+        case AnimationPreset::Sprite_12fps:    return "Sprite Smooth (12 fps)";
+        case AnimationPreset::GIF_10fps:       return "GIF Normal (10 fps)";
+        case AnimationPreset::GIF_15fps:       return "GIF Fast (15 fps)";
+        case AnimationPreset::Film_24fps:      return "Film / GIF HD (24 fps)";
+        case AnimationPreset::Video_30fps:     return "Video (30 fps)";
+        case AnimationPreset::Video_60fps:     return "Video HD (60 fps)";
+        default:                               return "Unknown";
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AnimationTimeline
+//
+// Frame-based animation container with playback state machine.
+//
+//   ┌─────┬─────┬─────┬─────┬─────┐
+//   │  0  │  1  │  2  │ ... │  N  │
+//   └─────┴─────┴─────┴─────┴─────┘
+//               ▲
+//          currentFrame_
+//
+// • Update(dt) advances currentFrame_ based on per-frame delay or 1/fps_.
+// • The timeline does NOT render anything; callers read Frame(CurrentFrame()).surface.
+// • Looping wraps back to frame 0; non-looping stops at the last frame.
+// ---------------------------------------------------------------------------
+class AnimationTimeline {
+public:
+    enum class PlaybackState { Stopped, Playing, Paused };
+
+    /// Construct with a fixed canvas size; always starts with one blank frame.
+    AnimationTimeline(std::uint32_t width, std::uint32_t height);
+
+    // ---- Frame management ----------------------------------------------
+
+    /// Append a blank (transparent) frame. Returns the new frame index.
+    int  AddFrame();
+
+    /// Deep-copy frame at index and insert right after it. Returns new index.
+    int  DuplicateFrame(int index);
+
+    /// Insert a blank frame before the given index.
+    void InsertFrame(int before);
+
+    /// Remove frame at index. Always keeps at least one frame.
+    void RemoveFrame(int index);
+
+    /// Move frame from -> to, adjusting currentFrame_ accordingly.
+    void MoveFrame(int from, int to);
+
+    [[nodiscard]] int                   FrameCount() const noexcept;
+    [[nodiscard]] AnimationFrame&       Frame(int i);
+    [[nodiscard]] const AnimationFrame& Frame(int i) const;
+
+    // ---- Playback ------------------------------------------------------
+
+    void Play();
+    void Pause();
+    void Stop();
+
+    /// Advance the animation by dt seconds; changes currentFrame_ as needed.
+    void Update(float dt);
+
+    [[nodiscard]] PlaybackState State()        const noexcept { return state_;        }
+    [[nodiscard]] int           CurrentFrame() const noexcept { return currentFrame_; }
+    void                        SetCurrentFrame(int i) noexcept;
+
+    // ---- Settings ------------------------------------------------------
+
+    [[nodiscard]] float FPS()     const noexcept { return fps_;     }
+    void                SetFPS(float fps) noexcept;
+
+    [[nodiscard]] bool  Looping() const noexcept { return looping_; }
+    void                SetLooping(bool v) noexcept { looping_ = v; }
+
+    /// Total animation duration in seconds (sum of all effective per-frame delays).
+    [[nodiscard]] float TotalDuration() const;
+
+    /// Effective delay for frame i (per-frame override or 1/fps_).
+    [[nodiscard]] float FrameDelay(int i) const noexcept;
+
+    // ---- Dimensions ----------------------------------------------------
+
+    [[nodiscard]] std::uint32_t Width()  const noexcept { return width_;  }
+    [[nodiscard]] std::uint32_t Height() const noexcept { return height_; }
+
+    /// Resize all frames (clears pixel data in each frame's surface).
+    void Resize(std::uint32_t newW, std::uint32_t newH);
+
+private:
+    std::uint32_t               width_;
+    std::uint32_t               height_;
+    std::vector<AnimationFrame> frames_;
+    float                       fps_          = 12.f;
+    bool                        looping_      = true;
+    PlaybackState               state_        = PlaybackState::Stopped;
+    int                         currentFrame_ = 0;
+    float                       elapsed_      = 0.f;   // accumulator for current frame
+};
+
+} // namespace pelpaint::core
