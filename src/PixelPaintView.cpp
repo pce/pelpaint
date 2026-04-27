@@ -2804,8 +2804,10 @@ void PixelPaintView::DrawRightPanel()
 
             // Helper: vertical-scroll child, content clipped to panel width
             // Flags: no horizontal scrollbar, auto vertical scrollbar
-            constexpr ImGuiWindowFlags kContentFlags =
-                ImGuiWindowFlags_NoScrollWithMouse; // outer panel handles mouse, inner scrolls via scrollbar only
+            // Allow natural mouse-wheel scrolling inside each tab.
+            // The outer RightPanel child has NoScrollWithMouse so scroll
+            // cannot bleed through to the canvas.
+            constexpr ImGuiWindowFlags kContentFlags = 0;
 
             if (ImGui::BeginTabItem("Tool")) {
                 ImGui::BeginChild("TabScroll_Tool",
@@ -3677,7 +3679,11 @@ void PixelPaintView::DrawLayersTab()
 
 void PixelPaintView::Draw(std::string_view label)
 {
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoMove              |
+                                   ImGuiWindowFlags_NoCollapse           |
+                                   ImGuiWindowFlags_NoTitleBar           |
+                                   ImGuiWindowFlags_NoScrollbar          |
+                                   ImGuiWindowFlags_NoScrollWithMouse;
 
     ImVec2 screenSize = ImGui::GetIO().DisplaySize;
     ImGui::SetNextWindowSize(screenSize);
@@ -3747,40 +3753,57 @@ void PixelPaintView::Draw(std::string_view label)
     const float animPanelH    = showAnimPanel_ ? animPanelHeight_ : 0.f;
     const float contentHeight = screenSize.y - statusBarHeight - topPadding - bottomPadding - animPanelH;
 
-    // Keep right-panel width within a safe range so it can never push
-    // canvasAreaWidth to zero (which causes the panel to flip to x=0).
     const float kMinCanvasW = 200.0f;
     const float kResizerW   = 6.0f;
-    rightPanelWidth = std::max(250.0f,
-        std::min(rightPanelWidth,
-                 screenSize.x - leftToolbarWidth - kMinCanvasW - kResizerW * 2.0f));
 
-    ImGui::SetCursorPos(ImVec2(0.0f, topPadding));
+    // ── Layout — all elements use SetCursorScreenPos for absolute placement ──
+    // This means no SameLine() layout arithmetic can ever drift the panel
+    // away from the right edge.
 
-    // LEFT TOOLBAR (thin, vertical) - tools only
+    // Clamp panel width so it can never shrink the canvas below kMinCanvasW.
+    rightPanelWidth = std::clamp(rightPanelWidth, 250.0f,
+        screenSize.x - leftToolbarWidth - kMinCanvasW - kResizerW);
+
+    // ── LEFT TOOLBAR ──────────────────────────────────────────────────────────
     if (!overlayToolbar) {
-        ImGui::BeginChild("LeftToolbar", ImVec2(leftToolbarWidth, contentHeight), true, ImGuiWindowFlags_NoScrollbar);
-        {
-            DrawToolbar();
-        }
+        ImGui::SetCursorScreenPos(ImVec2(0.0f, topPadding));
+        ImGui::BeginChild("LeftToolbar", ImVec2(leftToolbarWidth, contentHeight), true,
+            ImGuiWindowFlags_NoScrollbar);
+        DrawToolbar();
         ImGui::EndChild();
-
-        ImGui::SameLine();
     }
 
-    // CENTER CANVAS AREA
-    // - Never scrolls (ImGui scroll fully disabled)
-    // - Canvas is always centered; pan/zoom handled inside DrawCanvasView
-    // - Footer is placed AFTER this block at a fixed screen position
-    const float reservedPanelW  = (!rightPanelCollapsed && !overlayPanels)
-                                  ? (rightPanelWidth + kResizerW) : 0.0f;
-    // Guard against ever going below kMinCanvasW so the panel can't flip left.
-    const float canvasAreaWidth = std::max(kMinCanvasW,
-        screenSize.x - leftToolbarWidth - reservedPanelW - kResizerW);
-    ImGui::BeginChild("CanvasArea", ImVec2(canvasAreaWidth, contentHeight), false,
-        ImGuiWindowFlags_NoScrollbar  |
+    // ── RIGHT PANEL — pinned to the right edge ────────────────────────────────
+    // Position is computed independently of the canvas so it can NEVER slide.
+    if (!rightPanelCollapsed) {
+        const float panelX = screenSize.x - rightPanelWidth;
+        ImGui::SetCursorScreenPos(ImVec2(panelX, topPadding));
+        DrawRightPanel();
+
+        // Drag-to-resize handle sits in the kResizerW gap to the left of the panel.
+        ImGui::SetCursorScreenPos(ImVec2(panelX - kResizerW * 0.5f, topPadding));
+        ImGui::InvisibleButton("RightPanelResizer",
+            ImVec2(kResizerW + 4.0f, contentHeight - 4.0f));
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            rightPanelWidth = std::clamp(
+                rightPanelWidth - ImGui::GetIO().MouseDelta.x,
+                250.0f,
+                screenSize.x - leftToolbarWidth - kMinCanvasW - kResizerW);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
+    // ── CANVAS AREA — fills the exact gap between toolbar and panel ───────────
+    const float canvasX = leftToolbarWidth;
+    const float canvasW = screenSize.x
+                        - leftToolbarWidth
+                        - (!rightPanelCollapsed ? rightPanelWidth + kResizerW : 0.0f);
+    ImGui::SetCursorScreenPos(ImVec2(canvasX, topPadding));
+    ImGui::BeginChild("CanvasArea", ImVec2(canvasW, contentHeight), false,
+        ImGuiWindowFlags_NoScrollbar       |
         ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoNav        |
+        ImGuiWindowFlags_NoNav             |
         ImGuiWindowFlags_NoMove);
     {
         DrawCanvasView();
@@ -3799,42 +3822,13 @@ void PixelPaintView::Draw(std::string_view label)
     }
     ImGui::EndChild();
 
-    // Floating toolbar overlay in landscape.
-    // Give it the full contentHeight so DrawToolbar() can distribute all
-    // buttons evenly without any hardcoded tool-count arithmetic here.
+    // ── FLOATING TOOLBAR OVERLAY (landscape / overlay mode) ───────────────────
     if (overlayToolbar) {
         ImGui::SetCursorScreenPos(ImVec2(toolbarPaddingX, topPadding));
         ImGui::BeginChild("FloatingToolbar", ImVec2(44.0f, contentHeight), true,
             ImGuiWindowFlags_NoScrollbar);
         DrawToolbar();
         ImGui::EndChild();
-    }
-
-    // RIGHT PANEL — always docked to the right of the canvas.
-    if (!rightPanelCollapsed) {
-        // Docked: placed immediately after the canvas in the layout flow.
-        ImGui::SameLine(0.f, kResizerW);
-        ImGui::SetCursorPosY(topPadding);
-        const ImVec2 panelPos = ImGui::GetCursorScreenPos();
-
-        DrawRightPanel();
-
-        // ---- Drag-to-resize handle ----
-        // Uses screen-space placement so it sits on the seam between the
-        // canvas child and the panel child, intercepting mouse events cleanly.
-        const float handleX = panelPos.x - kResizerW * 0.5f - 2.0f;
-        ImGui::SetCursorScreenPos(ImVec2(handleX, topPadding));
-        ImGui::InvisibleButton("RightPanelResizer",
-            ImVec2(kResizerW + 4.0f, contentHeight - 4.0f));
-
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            const float delta = ImGui::GetIO().MouseDelta.x;
-            rightPanelWidth = std::max(250.0f,
-                std::min(rightPanelWidth - delta,
-                         screenSize.x - leftToolbarWidth - kMinCanvasW - kResizerW * 2.0f));
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
     }
 
     #if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
