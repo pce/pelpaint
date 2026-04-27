@@ -1973,51 +1973,33 @@ void PixelPaintView::HandleCanvasInput()
     }
 
     // ---------------------------------------------------------------
-    // Scroll wheel behaviour (industry-standard pixel-art app conventions):
-    //   • Plain scroll          → pan the canvas (never changes layout)
-    //   • Ctrl + scroll         → zoom around the cursor
-    //   • Trackpad pinch        → zoom (SDL maps pinch → Ctrl + wheel)
+    // Scroll wheel behaviour:
+    //   • Ctrl + scroll / trackpad pinch → zoom around the cursor
+    //   • Plain scroll                   → ignored (no accidental pan)
     //
-    // Keeping zoom behind Ctrl prevents accidental layout jumps caused by
-    // fitCanvas toggling while the user just wants to scroll past the canvas.
+    // Panning is intentional-only: middle-mouse drag or Space + LMB drag.
     // ---------------------------------------------------------------
-    if ((canvasHovered || windowHovered) && io.MouseWheel != 0.0f) {
-        if (io.KeyCtrl) {
-            // ---------------------------------------------------------
-            // Ctrl + scroll = zoom towards cursor
-            // ---------------------------------------------------------
-            const float zoomFactor = (io.MouseWheel > 0.0f) ? 1.1f : (1.0f / 1.1f);
-            const float oldScale   = userCanvasScale;
-            const float newScale   = std::clamp(oldScale * zoomFactor, 0.05f, 40.0f);
+    if ((canvasHovered || windowHovered) && io.MouseWheel != 0.0f && io.KeyCtrl) {
+        // Ctrl + scroll = zoom towards cursor
+        const float zoomFactor = (io.MouseWheel > 0.0f) ? 1.1f : (1.0f / 1.1f);
+        const float oldScale   = userCanvasScale;
+        const float newScale   = std::clamp(oldScale * zoomFactor, 0.05f, 40.0f);
 
-            // Keep the canvas pixel under the cursor stationary.
-            const ImVec2 regionMin  = ImGui::GetItemRectMin();
-            const ImVec2 regionSize = ImGui::GetItemRectSize();
-            const ImVec2 center     = ImVec2(regionMin.x + regionSize.x * 0.5f,
-                                             regionMin.y + regionSize.y * 0.5f);
-            const ImVec2 toMouse    = ImVec2(mousePos.x - center.x - panOffset.x,
-                                             mousePos.y - center.y - panOffset.y);
+        // Keep the canvas pixel under the cursor stationary.
+        const ImVec2 regionMin  = ImGui::GetItemRectMin();
+        const ImVec2 regionSize = ImGui::GetItemRectSize();
+        const ImVec2 center     = ImVec2(regionMin.x + regionSize.x * 0.5f,
+                                         regionMin.y + regionSize.y * 0.5f);
+        const ImVec2 toMouse    = ImVec2(mousePos.x - center.x - panOffset.x,
+                                         mousePos.y - center.y - panOffset.y);
 
-            panOffset.x -= toMouse.x * (newScale / oldScale - 1.0f);
-            panOffset.y -= toMouse.y * (newScale / oldScale - 1.0f);
-            scrollOffset = panOffset;
+        panOffset.x -= toMouse.x * (newScale / oldScale - 1.0f);
+        panOffset.y -= toMouse.y * (newScale / oldScale - 1.0f);
+        scrollOffset = panOffset;
 
-            userCanvasScale = newScale;
-            fitCanvas       = false;   // explicit zoom disables fit-to-window
-            io.WantCaptureMouse = true;
-        } else {
-            // ---------------------------------------------------------
-            // Plain scroll = pan the canvas
-            // Scroll up   → canvas shifts up   (see more of the top)
-            // Scroll down → canvas shifts down (see more of the bottom)
-            // Horizontal scroll (trackpad two-finger swipe) pans X.
-            // ---------------------------------------------------------
-            constexpr float kPanSpeed = 32.0f;
-            panOffset.x   -= io.MouseWheelH * kPanSpeed;
-            panOffset.y   -= io.MouseWheel  * kPanSpeed;
-            scrollOffset   = panOffset;
-            io.WantCaptureMouse = true;
-        }
+        userCanvasScale = newScale;
+        fitCanvas       = false;   // explicit zoom disables fit-to-window
+        io.WantCaptureMouse = true;
     }
 
     // ---------------------------------------------------------------
