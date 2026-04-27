@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../ColorPalettes.hpp"
-#include "../PixelPaintView.hpp"
+#include "../core/Types.hpp"
 #include "ExportUtils.hpp"
 #include <string>
 #include <vector>
@@ -124,6 +124,7 @@ namespace pelpaint::exporter {
 
         auto sampleRamp = [&](float t) -> pelpaint::Pixel {
             t = Clamp01(t);
+            if (t >= 1.0f) return pelpaint::Pixel{stops[nStops-1].r, stops[nStops-1].g, stops[nStops-1].b, 255};
             for (int i = 1; i < nStops; ++i) {
                 if (t <= stops[i].t) {
                     const float span = stops[i].t - stops[i - 1].t;
@@ -145,7 +146,10 @@ namespace pelpaint::exporter {
         for (std::uint32_t y = 0; y < view.height; ++y) {
             for (std::uint32_t x = 0; x < view.width; ++x) {
                 uint8_t r = 0, g = 0, b = 0, a = 255;
-                ReadPixelRGBA8(view, x, y, r, g, b, a);
+                if (!ReadPixelRGBA8(view, x, y, r, g, b, a)) {
+                    outPixels[y * view.width + x] = pelpaint::Pixel{0, 0, 0, 0};
+                    continue;
+                }
 
                 if (a == 0) {
                     // Fully transparent — preserve transparency.

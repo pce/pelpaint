@@ -1194,8 +1194,8 @@ void PixelPaintView::GenerateDepthMapLayer()
 
     pelpaint::ImageView view;
     view.data     = coreView.data;
-    view.width    = static_cast<std::uint32_t>(canvasWidth);
-    view.height   = static_cast<std::uint32_t>(canvasHeight);
+    view.width    = static_cast<std::uint32_t>(canvas_.Width());
+    view.height   = static_cast<std::uint32_t>(canvas_.Height());
     view.stride   = view.width * 4;
     view.channels = 4;
 
@@ -1210,10 +1210,6 @@ void PixelPaintView::GenerateDepthMapLayer()
     PushUndo("Depth Map Layer");
 
     canvas_.AddLayer("Depth Map");
-
-    // Activate the new layer (it was appended last).
-    const int newIdx = static_cast<int>(canvas_.Layers().size()) - 1;
-    canvas_.SetActiveLayer(newIdx);
 
     Layer* layer = canvas_.ActiveLayer();
     if (!layer) return;
@@ -3249,19 +3245,19 @@ void PixelPaintView::DrawFilterTab()
 
         // Color mode
         ImGui::Text("Color mode:");
-        ImGui::RadioButton("Grayscale##dm",   &depthMapColorMode, 0);
+        ImGui::RadioButton("Grayscale##depth",   &depthMapColorMode, 0);
         ImGui::SetItemTooltip("Black = far / dark, White = near / bright");
-        ImGui::RadioButton("False Color##dm", &depthMapColorMode, 1);
+        ImGui::RadioButton("False Color##depth", &depthMapColorMode, 1);
         ImGui::SetItemTooltip("Spectral ramp: violet → blue → teal → green → amber → pink");
-        ImGui::RadioButton("Warm Tone##dm",   &depthMapColorMode, 2);
+        ImGui::RadioButton("Warm Tone##depth",   &depthMapColorMode, 2);
         ImGui::SetItemTooltip("Classic pixel-art look: dark purple → magenta → orange → warm yellow");
 
         ImGui::Spacing();
-        ImGui::Checkbox("Invert depth##dm", &depthMapInvert);
+        ImGui::Checkbox("Invert depth##depth", &depthMapInvert);
         ImGui::SetItemTooltip("Swap near/far: bright pixels become deep, dark become shallow");
 
         ImGui::Spacing();
-        if (ImGui::Button("Generate as New Layer##dm", ImVec2(-1, 0))) {
+        if (ImGui::Button("Generate as New Layer##depth", ImVec2(-1, 0))) {
             GenerateDepthMapLayer();
         }
     }
