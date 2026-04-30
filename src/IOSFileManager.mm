@@ -1,7 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
+// Guard import for UniformTypeIdentifiers for compatibility with iOS < 14.0
+#if __has_include(<UniformTypeIdentifiers/UniformTypeIdentifiers.h>)
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#endif
 
 #include "IOSFileManager.h"
 
@@ -196,19 +199,33 @@ bool iOS_OpenFilePickerWithContext(void* context, iOS_FilePickerCallback callbac
 
         UIDocumentPickerViewController *picker;
 
+        // The following block replaces the static references to UTTypeImage, UTTypePNG, UTTypeJPEG
+        // with a dynamic approach for compatibility with iOS deployment targets below 14.0 and non-Apple platforms
+
+        NSArray *contentTypes = nil;
         if (@available(iOS 14.0, *)) {
-            NSArray *contentTypes = @[
-                UTTypeImage,
-                UTTypePNG,
-                UTTypeJPEG
-            ];
+            contentTypes = @[];
+#ifdef __IPHONE_14_0
+            contentTypes = @[];
+            Class UTTypeClass = NSClassFromString(@"UTType");
+            if (UTTypeClass) {
+                id imageType = [UTTypeClass valueForKey:@"image"];
+                id pngType = [UTTypeClass valueForKey:@"png"];
+                id jpegType = [UTTypeClass valueForKey:@"jpeg"];
+                NSMutableArray *types = [NSMutableArray array];
+                if (imageType) [types addObject:imageType];
+                if (pngType) [types addObject:pngType];
+                if (jpegType) [types addObject:jpegType];
+                contentTypes = [types copy];
+            }
+#endif
             picker = [[UIDocumentPickerViewController alloc]
-                initForOpeningContentTypes:contentTypes];
+                      initForOpeningContentTypes:contentTypes];
         } else {
             NSArray *documentTypes = @[@"public.image", @"public.png", @"public.jpeg"];
             picker = [[UIDocumentPickerViewController alloc]
-                initWithDocumentTypes:documentTypes
-                inMode:UIDocumentPickerModeOpen];
+                      initWithDocumentTypes:documentTypes
+                      inMode:UIDocumentPickerModeOpen];
         }
 
         picker.delegate = delegate;
@@ -255,19 +272,33 @@ bool iOS_OpenFilePicker(void (*callback)(const char* filepath)) {
 
         UIDocumentPickerViewController *picker;
 
+        // The following block replaces the static references to UTTypeImage, UTTypePNG, UTTypeJPEG
+        // with a dynamic approach for compatibility with iOS deployment targets below 14.0 and non-Apple platforms
+
+        NSArray *contentTypes = nil;
         if (@available(iOS 14.0, *)) {
-            NSArray *contentTypes = @[
-                UTTypeImage,
-                UTTypePNG,
-                UTTypeJPEG
-            ];
+            contentTypes = @[];
+#ifdef __IPHONE_14_0
+            contentTypes = @[];
+            Class UTTypeClass = NSClassFromString(@"UTType");
+            if (UTTypeClass) {
+                id imageType = [UTTypeClass valueForKey:@"image"];
+                id pngType = [UTTypeClass valueForKey:@"png"];
+                id jpegType = [UTTypeClass valueForKey:@"jpeg"];
+                NSMutableArray *types = [NSMutableArray array];
+                if (imageType) [types addObject:imageType];
+                if (pngType) [types addObject:pngType];
+                if (jpegType) [types addObject:jpegType];
+                contentTypes = [types copy];
+            }
+#endif
             picker = [[UIDocumentPickerViewController alloc]
-                initForOpeningContentTypes:contentTypes];
+                      initForOpeningContentTypes:contentTypes];
         } else {
             NSArray *documentTypes = @[@"public.image", @"public.png", @"public.jpeg"];
             picker = [[UIDocumentPickerViewController alloc]
-                initWithDocumentTypes:documentTypes
-                inMode:UIDocumentPickerModeOpen];
+                      initWithDocumentTypes:documentTypes
+                      inMode:UIDocumentPickerModeOpen];
         }
 
         picker.delegate = delegate;
@@ -290,3 +321,4 @@ bool iOS_IsIPad(void) {
 }
 
 #endif // TARGET_OS_IOS
+
