@@ -57,6 +57,9 @@ public:
 #if defined(USE_METAL_BACKEND)
     void SetMetalDevice(void* device);
 #endif
+    // iOS lifecycle hooks — called from SDL_AppEvent
+    void OnReturnFromBackground() noexcept;
+    void OnMemoryWarning() noexcept;
 
     // ---- iOS file callback (static so it can be passed as C function ptr) --
     static void IOSOpenFileCallback(void* context, const char* filepath);

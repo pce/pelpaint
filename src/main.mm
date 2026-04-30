@@ -46,8 +46,9 @@ namespace fs = std::filesystem;
 // Application state structure
 struct AppState
 {
-    SDL_Window* window = nullptr;
-    bool quit = false;
+    SDL_Window* window   = nullptr;
+    bool quit            = false;
+    bool isBackground    = false;   // true while the app is suspended by iOS
     std::unique_ptr<PixelPaintView> pixelPaintView;
 
 #if defined(USE_METAL_BACKEND)
@@ -103,6 +104,14 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     g_AppState->metalLayer = (__bridge CAMetalLayer*)SDL_Metal_GetLayer(g_AppState->metalView);
     g_AppState->metalLayer.device = g_AppState->metalDevice;
     g_AppState->metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    // Set the drawable size explicitly so it always matches the backing pixels,
+    // even before the first SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED fires.
+    {
+        int w = 0, h = 0;
+        SDL_GetWindowSizeInPixels(g_AppState->window, &w, &h);
+        if (w > 0 && h > 0)
+            g_AppState->metalLayer.drawableSize = CGSizeMake(w, h);
+    }
     SDL_Log("Metal setup complete\n");
 
 #else
@@ -206,17 +215,75 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 
     ImGui_ImplSDL3_ProcessEvent(event);
 
-    if (event->type == SDL_EVENT_QUIT)
+    switch (event->type)
     {
+    // ── App termination ───────────────────────────────────────────────────────
+    case SDL_EVENT_QUIT:
         state->quit = true;
         return SDL_APP_SUCCESS;
-    }
 
-    if (event->type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-        event->window.windowID == SDL_GetWindowID(state->window))
-    {
-        state->quit = true;
-        return SDL_APP_SUCCESS;
+    case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+        if (event->window.windowID == SDL_GetWindowID(state->window))
+        {
+            state->quit = true;
+            return SDL_APP_SUCCESS;
+        }
+        break;
+
+    // ── iOS background / foreground lifecycle ─────────────────────────────────
+    // SDL3 maps UIApplicationDelegate callbacks to these events:
+    //   applicationWillResignActive   → SDL_EVENT_WILL_ENTER_BACKGROUND
+    //   applicationDidEnterBackground → SDL_EVENT_DID_ENTER_BACKGROUND
+    //   applicationWillEnterForeground → SDL_EVENT_WILL_ENTER_FOREGROUND
+    //   applicationDidBecomeActive    → SDL_EVENT_DID_ENTER_FOREGROUND
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+        // Stop rendering before iOS suspends us — avoids nextDrawable timeout
+        // and prevents the app from burning CPU budget during the grace period.
+        state->isBackground = true;
+        break;
+
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+        // We're fully suspended.  isBackground is already true.
+        break;
+
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+        // Allow rendering again before the app is fully visible so the first
+        // frame is ready the moment the app appears.
+        state->isBackground = false;
+        break;
+
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        // Force a full texture re-upload — tile dirty-bits may have been
+        // cleared before suspend, leaving the GPU texture potentially stale.
+        if (state->pixelPaintView)
+            state->pixelPaintView->OnReturnFromBackground();
+        break;
+
+    // ── Memory pressure ───────────────────────────────────────────────────────
+    // iOS fires this when RAM is tight.  Free non-essential caches so the OS
+    // does not terminate the app while it is in the background.
+    case SDL_EVENT_LOW_MEMORY:
+        if (state->pixelPaintView)
+            state->pixelPaintView->OnMemoryWarning();
+        break;
+
+    // ── Window / display changes (rotation, resolution) ───────────────────────
+    // Update the Metal drawable size to match the new backing pixel dimensions.
+    // Without this, Metal renders at the wrong resolution after rotation.
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+#if defined(USE_METAL_BACKEND)
+        if (state->metalLayer)
+        {
+            int w = 0, h = 0;
+            SDL_GetWindowSizeInPixels(state->window, &w, &h);
+            if (w > 0 && h > 0)
+                state->metalLayer.drawableSize = CGSizeMake(w, h);
+        }
+#endif
+        break;
+
+    default:
+        break;
     }
 
     return SDL_APP_CONTINUE;
@@ -228,9 +295,14 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     AppState* state = static_cast<AppState*>(appstate);
 
     if (state->quit)
-    {
         return SDL_APP_SUCCESS;
-    }
+
+    // Do not render while iOS has suspended us.  SDL3 may already pause
+    // SDL_AppIterate via the display-link stop, but an explicit guard here
+    // is belt-and-suspenders — it also covers the narrow window between
+    // SDL_EVENT_WILL_ENTER_BACKGROUND and the display link actually stopping.
+    if (state->isBackground)
+        return SDL_APP_CONTINUE;
 
 #if defined(USE_METAL_BACKEND)
     // Metal rendering

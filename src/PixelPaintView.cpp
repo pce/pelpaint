@@ -198,6 +198,25 @@ void PixelPaintView::SetMetalDevice(void* device)
 }
 #endif
 
+void PixelPaintView::OnReturnFromBackground() noexcept
+{
+    // Metal textures with shared storage survive background on iOS, but
+    // the tile dirty-bits were cleared before suspend.  Force a full
+    // re-upload from the authoritative CPU-side pixel data so the first
+    // frame after resume is pixel-perfect.
+    canvas_.SetDirty();
+    canvas_.CompositeSurface().MarkAllDirty();
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::OnMemoryWarning() noexcept
+{
+    // iOS may terminate the app if it holds too much RAM while backgrounded.
+    // The undo / redo stacks are the biggest volatile allocations — clearing
+    // them is safe because all authoritative pixel data lives in canvas_ layers.
+    undo_.Clear();
+}
+
 
 void PixelPaintView::UpdateTexture()
 {
