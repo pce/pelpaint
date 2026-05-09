@@ -5,8 +5,20 @@
 #include <vector>
 
 #include "ImageSurface.hpp"
+#include "../operators/FrameOperator.hpp"
+#include "../core/Error.hpp"
 
 namespace pelpaint::core {
+
+// ---------------------------------------------------------------------------
+// FrameLayerState  —  keyframe record of one canvas layer's visibility for
+//                     a single animation frame (Photoshop-style layer states).
+// ---------------------------------------------------------------------------
+struct FrameLayerState {
+    int   layerIndex = -1;    ///< Index into Canvas::Layers()
+    bool  visible    = true;  ///< Layer visibility override for this frame
+    float opacity    = 1.0f;  ///< Layer opacity override (0..1)
+};
 
 // ---------------------------------------------------------------------------
 // AnimationFrame
@@ -21,6 +33,22 @@ struct AnimationFrame {
     ImageSurface surface;
     float        delay = 0.f;
     std::string  label;
+
+    /// Per-frame layer visibility keyframes.
+    /// Empty = "use the canvas layer defaults" (backward-compatible).
+    /// Populated by GeneratePaletteCycle and similar effect bakers.
+    std::vector<FrameLayerState> layerStates;
+
+    // ---- Derived-frame / layer-state system (Photoshop-style) ----------
+    //
+    // If sourceFrame >= 0 this frame's pixels are produced by running
+    // pipeline against frames_[sourceFrame].surface.  surface caches the
+    // last baked result; call BakeFrame() to recompute after the source
+    // or pipeline changes.
+    int                                sourceFrame   = -1;   ///< -1 = direct (hand-edited)
+    operators::DrawMode                mode          = operators::DrawMode::PixelPerfect;
+    operators::FramePipeline           pipeline;             ///< ops applied to sourceFrame
+    bool                               pipelineDirty = false;///< true -> BakeFrame() needed
 };
 
 // ---------------------------------------------------------------------------
@@ -113,6 +141,24 @@ public:
     /// Move frame from -> to, adjusting currentFrame_ accordingly.
     void MoveFrame(int from, int to);
 
+    /// Create a new frame derived from sourceIndex by applying pipeline.
+    /// The new frame is appended at the end.  Call BakeFrame(newIdx) to
+    /// populate its surface.  Returns the new frame's index.
+    int DeriveFrame(int                              sourceIndex,
+                    operators::FramePipeline         pipeline,
+                    operators::DrawMode              mode =
+                        operators::DrawMode::PixelPerfect);
+
+    /// Re-apply the stored pipeline from sourceFrame into frame.surface.
+    /// No-op (success) when sourceFrame < 0 or pipeline is empty.
+    [[nodiscard]] std::expected<void, pelpaint::Error> BakeFrame(int frameIndex);
+
+    /// Bake every derived frame marked pipelineDirty.
+    void BakeAllDirty();
+
+    /// Mark every frame that references sourceIndex as pipelineDirty.
+    void MarkDependentsDirty(int sourceIndex) noexcept;
+
     [[nodiscard]] int                   FrameCount() const noexcept;
     [[nodiscard]] AnimationFrame&       Frame(int i);
     [[nodiscard]] const AnimationFrame& Frame(int i) const;
@@ -138,6 +184,9 @@ public:
     [[nodiscard]] bool  Looping() const noexcept { return looping_; }
     void                SetLooping(bool v) noexcept { looping_ = v; }
 
+    [[nodiscard]] operators::DrawMode DefaultMode() const noexcept { return defaultMode_; }
+    void SetDefaultMode(operators::DrawMode m) noexcept { defaultMode_ = m; }
+
     /// Total animation duration in seconds (sum of all effective per-frame delays).
     [[nodiscard]] float TotalDuration() const;
 
@@ -161,6 +210,7 @@ private:
     PlaybackState               state_        = PlaybackState::Stopped;
     int                         currentFrame_ = 0;
     float                       elapsed_      = 0.f;   // accumulator for current frame
+    operators::DrawMode         defaultMode_  = operators::DrawMode::PixelPerfect;
 };
 
 } // namespace pelpaint::core

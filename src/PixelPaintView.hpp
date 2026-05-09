@@ -16,9 +16,16 @@
 #include "core/Types.hpp"
 #include "core/Canvas.hpp"
 #include "core/UndoHistory.hpp"
+#include "settings/AppSettings.hpp"
+#include "ui/SettingsDialog.hpp"
+#include "ui/AnimationPanelUI.hpp"
+#include "effects/PaletteCycler.hpp"
+#include "effects/AnimFxBaker.hpp"
+#include "render/ComputeBackend.hpp"
 #include "core/AnimationTimeline.hpp"
 #include "ColorPalettes.hpp"
 #include "export/ImageExporter.hpp"
+#include "filters/Filters.hpp"
 
 #if defined(USE_METAL_BACKEND)
     #ifdef __OBJC__
@@ -100,6 +107,10 @@ private:
     // Replaces: undoStack, redoStack, maxUndoSteps
     // ====================================================================
 
+    // ---- Settings ----------------------------------------------------------
+    AppSettings          settings_;
+    ui::SettingsDialog   settingsDialog_;
+
     UndoHistory<CanvasSnapshot> undo_{ 50 };
 
     // ====================================================================
@@ -131,6 +142,14 @@ private:
 
     Layer*       GetActiveLayer()       { return canvas_.ActiveLayer(); }
     const Layer* GetActiveLayer() const { return canvas_.ActiveLayer(); }
+
+    /// Returns the active layer wrapped in std::expected.
+    /// Use with .and_then() / .transform() to build monadic filter pipelines.
+    [[nodiscard]] std::expected<Layer*, Error> GetActiveLayerExpected() noexcept {
+        Layer* l = canvas_.ActiveLayer();
+        if (!l) return std::unexpected(Error::NullLayer());
+        return l;
+    }
 
     // Force a composite + texture refresh (use sparingly — prefer IsDirty flow)
     void RenderLayerToCanvas();
@@ -251,6 +270,7 @@ private:
     bool  depthMapInvert    = false;
     int meshExportGridSize = 8;
     int meshExportMode     = 0;
+    bool meshFlatZ         = true;   ///< Flat 2-D mesh (Z=0) for LoPoly/Wireframe/PixelMesh
 
     // ====================================================================
     // ShapeRedraw brush
@@ -268,6 +288,13 @@ private:
     bool                  shapeRedrawFilterUsePalette = false;
 
     std::array<bool, 64>  shapeRedrawCustomMap = {};
+
+    // ---- Selection / canvas FAB state ------------------------------------
+    struct FabState {
+        int  translateX = 0;
+        int  translateY = 0;
+    } fabState_;
+
     // ====================================================================
     // Animation timeline
     // ====================================================================
@@ -278,6 +305,23 @@ private:
     int   animLastFrame_   = -1;      // frame index last rendered to texture
     core::AnimationTimeline::PlaybackState animPrevState_
         = core::AnimationTimeline::PlaybackState::Stopped;
+
+    /// State for the "Palette Cycle…" modal in the animation panel.
+    ui::anim::PaletteCycleDialogState paletteCycleDialog_;
+    /// State for the "Noise FX…" modal.
+    ui::anim::NoiseFxDialogState      noiseFxDialog_;
+    /// State for the "Particle FX…" modal.
+    ui::anim::ParticleFxDialogState   particleFxDialog_;
+    /// State for the global "Smooth Frames…" modal.
+    ui::anim::SmoothDialogState       smoothDialog_;
+
+    // ====================================================================
+    // Compute backend (GPU or CPU fallback)
+    //
+    // Created lazily in SetMetalDevice() on Apple; on other platforms a
+    // CpuComputeBackend is initialised in the constructor.
+    // ====================================================================
+    render::Backend computeBackend_;
 
     // ====================================================================
     // Pixel Generator
@@ -358,6 +402,17 @@ private:
     int  selectedDitheringMethod = 0;
 
     // ====================================================================
+    // Triangulate filter
+    // ====================================================================
+    int   triNumPoints   = 300;
+    int   triMutations   = 2;
+    float triVariation   = 0.30f;
+    int   triPopulation  = 100;
+    int   triCutoff      = 5;
+    int   triGenerations = 30;
+    bool  triEdgeBias    = true;
+
+    // ====================================================================
     // Frequent / recent colours
     // ====================================================================
 
@@ -427,6 +482,8 @@ private:
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
+    bool SaveProject(const std::string& filename);
+    bool LoadProject(const std::string& filename);
 
     // ====================================================================
     // Filters / effects
@@ -441,12 +498,9 @@ private:
     void ApplyPalette(const std::vector<Pixel>& palette);
     void ApplyPixelify(int pixelSize, bool usePalette = true);
     void ApplyShapeRedrawFilter();
-
-    void SetupDitheringUI();
+    void ApplyTriangulate();
 
     // Helpers used by dithering algorithms
-    void   DiffuseError(int x, int y, int errR, int errG, int errB,
-                        int spreadX, int spreadY, int divisor, int totalWeight);
     Pixel  FindNearestPaletteColor(const Pixel& color, const std::vector<Pixel>& palette) const;
     float  ColorDistance(const Pixel& a, const Pixel& b) const noexcept;
 
@@ -470,6 +524,9 @@ private:
     void DrawStatusBar();
     void DrawBrushSettings();
     void DrawSelectionOverlay();
+    void DrawSelectionFab();
+    void DrawCanvasFab();
+    void TranslateLayer(int dx, int dy);
 
     void DrawRightPanel();
     void DrawToolTab();
@@ -485,6 +542,26 @@ private:
     void StampPixelPerfectToLayer(const tools::PixelPerfectGenerator::PixelPerfect& art);
     void BakeParticleBurst();
 
+    /// Bake N palette-cycle animation frames into the timeline.
+    /// cycleColors — the ordered colour slice (N = frame count = period).
+    /// quantize    — snap layer pixels to palette before baking.
+    /// fps         — per-frame delay in seconds; 0 = use timeline global FPS.
+    /// matchThreshold — RGBA distance tolerance for pixel membership.
+    void BakePaletteCycle(int                layerIdx,
+                          std::vector<Pixel> cycleColors,
+                          bool               quantize,
+                          float              fps            = 0.f,
+                          float              matchThreshold = 2.f);
+
+    /// Bake N frames of animated noise into the timeline.
+    void BakeNoiseFx(const effects::NoiseFxConfig& cfg);
+
+    /// Bake N frames of particle simulation into the timeline.
+    void BakeParticleFx(const effects::ParticleFxConfig& cfg);
+
+    /// Insert lerp frames between every existing frame pair (post-bake smoothing).
+    void ApplySmoothFrames(const effects::SmoothConfig& cfg);
+
 
     // ====================================================================
     // Input handling
@@ -492,7 +569,6 @@ private:
 
     void HandleCanvasInput();
     void HandleKeyboardShortcuts();
-    void ProcessDrawing(const ImVec2& mousePos);
 
     // Widget helpers
     void AddCheckbox(const std::string& label,

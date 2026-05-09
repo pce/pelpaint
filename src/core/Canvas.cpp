@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cmath>
-#include <numeric>
 
 // Verify binary layout compatibility between pelpaint::Pixel and core::PixelRGBA8.
 // Both are plain 4-byte RGBA structs — safe to reinterpret between them.

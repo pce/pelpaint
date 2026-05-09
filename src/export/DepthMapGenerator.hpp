@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ColorPalettes.hpp"
+#include "../core/Error.hpp"
 #include "../core/Types.hpp"
 #include "ExportUtils.hpp"
 #include <string>
@@ -166,6 +167,21 @@ namespace pelpaint::exporter {
             }
         }
         return true;
+    }
+
+    /// std::expected overload for BuildDepthMapRGBA.
+    /// Chains cleanly with .and_then() / .transform() / .or_else().
+    [[nodiscard]]
+    static std::expected<std::vector<pelpaint::Pixel>, pelpaint::Error>
+    BuildDepthMapRGBAExpected(
+        const pelpaint::ImageView& view,
+        ColorMode                  mode,
+        bool                       invert)
+    {
+        std::vector<pelpaint::Pixel> pixels;
+        if (!BuildDepthMapRGBA(view, mode, invert, pixels))
+            return std::unexpected(pelpaint::Error::InvalidFormat());
+        return pixels;
     }
   };
 } // namespace pelpaint::exporter

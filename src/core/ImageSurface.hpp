@@ -148,6 +148,13 @@ public:
     // to Flatten() or Resize().  No heap allocation on repeat calls.
     [[nodiscard]] ImageView Flatten() const;
 
+    /// Write a flat (row-major) RGBA8 buffer into the tiled surface.
+    /// `pixels` must contain exactly Width() * Height() elements.
+    /// This is the inverse of Flatten() and is used by the GPU compute
+    /// backend to scatter GPU output into the tile structure efficiently
+    /// (row-wise std::copy per tile — SIMD-friendly).
+    void WriteFlat(std::span<const PixelRGBA8> pixels);
+
 private:
     // ---- Internal tile bookkeeping -------------------------------------
 

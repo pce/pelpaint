@@ -46,28 +46,6 @@ public:
     virtual void Present() = 0;
 };
 
-// SDL3 GPU scaffold (no-op until wired)
-class SdlGpuBackend final : public SurfaceBackend {
-public:
-    bool Initialize(void* /*nativeWindow*/) override { return false; }
-    void Resize(std::uint32_t /*width*/, std::uint32_t /*height*/) override {}
 
-    bool EnsureLayer(std::uint32_t /*layerId*/,
-                     std::uint32_t /*width*/,
-                     std::uint32_t /*height*/) override
-    {
-        return false;
-    }
-
-    void UploadTile(std::uint32_t /*layerId*/,
-                    std::uint32_t /*tx*/,
-                    std::uint32_t /*ty*/,
-                    const core::ImageView& /*view*/) override
-    {
-    }
-
-    void RenderLayers(const std::vector<LayerInfo>& /*layers*/) override {}
-    void Present() override {}
-};
 
 } // namespace pelpaint::render

@@ -7,7 +7,6 @@ namespace pelpaint::ui {
 // Unreal Engine inspired dark theme
 inline void SetupUnrealTheme() {
     ImGuiStyle& style = ImGui::GetStyle();
-    ImGuiIO& io = ImGui::GetIO();
 
     // Colors - Unreal Engine dark theme
     ImVec4* colors = style.Colors;

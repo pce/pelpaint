@@ -2,17 +2,20 @@
 #include "DepthMapGenerator.hpp"
 #include "ExportUtils.hpp"
 
+#include <cmath>
+#include <set>
+
 namespace pelpaint::exporter {
 
     struct MeshVertex {
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
+        float x  = 0.0f;
+        float y  = 0.0f;
+        float z  = 0.0f;
         float nx = 0.0f;
         float ny = 0.0f;
         float nz = 1.0f;
-        float u = 0.0f;
-        float v = 0.0f;
+        float u  = 0.0f;
+        float v  = 0.0f;
         std::uint8_t r = 255;
         std::uint8_t g = 255;
         std::uint8_t b = 255;
@@ -20,39 +23,48 @@ namespace pelpaint::exporter {
     };
 
     struct MeshData {
-        std::vector<MeshVertex> vertices;
+        std::vector<MeshVertex>    vertices;
         std::vector<std::uint32_t> indices;
+        bool wireframe = false;  // true → indices are edge pairs; false → face triples
     };
 
-    bool MeshExporter::SaveAsMesh(const std::string& filename,
-                                  const pelpaint::ImageView& view,
+    // ================================================================
+    // SaveAsMesh — dispatch + PLY serialisation
+    // ================================================================
+
+    bool MeshExporter::SaveAsMesh(const std::string&            filename,
+                                  const pelpaint::ImageView&    view,
                                   const pelpaint::ColorPalette& palette,
-                                  const MeshExportOptions& options)
+                                  const MeshExportOptions&      options)
     {
-        (void)palette; // reserved for later palette-based coloring
+        (void)palette; // reserved for later palette-based colouring
 
         if (!view.valid() || options.gridSize == 0) return false;
 
         std::vector<float> depthMap;
-        if (!DepthMapGenerator::BuildDepthMap(view, options.gridSize, depthMap)) {
+        if (!DepthMapGenerator::BuildDepthMap(view, options.gridSize, depthMap))
             return false;
-        }
+
+        // Derive effective options: Plane always uses depth; all other modes default to flatZ.
+        MeshExportOptions opts = options;
+        if (opts.mode == MeshMode::Plane) opts.flatZ = false;
 
         MeshData mesh;
-        switch (options.mode) {
-            case MeshMode::Solid:
-                if (!BuildSolidMesh(view, depthMap, options.gridSize, options.depthScale, mesh))
+        switch (opts.mode) {
+            case MeshMode::Plane:
+                if (!BuildPlaneMesh(view, depthMap, opts.gridSize, opts.depthScale, mesh))
                     return false;
                 break;
             case MeshMode::Wireframe:
-                if (!BuildWireframeMesh(view, depthMap, options.gridSize, options.depthScale, mesh))
+                if (!BuildWireframeMesh(view, depthMap, opts.gridSize, opts.depthScale, opts, mesh))
                     return false;
                 break;
             case MeshMode::LoPoly:
-                // TODO
-                return false;
-            case MeshMode::PixelPerfect:
-                if (!BuildPixelPerfectMesh(view, depthMap, options.gridSize, options.depthScale, mesh))
+                if (!BuildLoPolyMesh(view, depthMap, opts.gridSize, opts.depthScale, opts, mesh))
+                    return false;
+                break;
+            case MeshMode::PixelMesh:
+                if (!BuildPixelMesh(view, depthMap, opts.gridSize, opts.depthScale, opts, mesh))
                     return false;
                 break;
         }
@@ -62,7 +74,7 @@ namespace pelpaint::exporter {
 
         const bool writeColors = options.useVertexColors;
 
-        if (options.mode == MeshMode::Wireframe) {
+        if (mesh.wireframe) {
             if ((mesh.indices.size() % 2u) != 0u) return false;
         } else {
             if ((mesh.indices.size() % 3u) != 0u) return false;
@@ -83,7 +95,7 @@ namespace pelpaint::exporter {
         file << "property uchar blue\n";
         file << "property uchar alpha\n";
 
-        if (options.mode == MeshMode::Wireframe) {
+        if (mesh.wireframe) {
             const std::size_t edgeCount = mesh.indices.size() / 2u;
             file << "element edge " << edgeCount << "\n";
             file << "property int vertex1\n";
@@ -96,35 +108,36 @@ namespace pelpaint::exporter {
 
         file << "end_header\n";
 
-        for (const auto& v : mesh.vertices) {
-            const std::uint8_t r = writeColors ? v.r : 255;
-            const std::uint8_t g = writeColors ? v.g : 255;
-            const std::uint8_t b = writeColors ? v.b : 255;
-            const std::uint8_t a = writeColors ? v.a : 255;
+        for (const auto& vtx : mesh.vertices) {
+            const std::uint8_t r = writeColors ? vtx.r : 255u;
+            const std::uint8_t g = writeColors ? vtx.g : 255u;
+            const std::uint8_t b = writeColors ? vtx.b : 255u;
+            const std::uint8_t a = writeColors ? vtx.a : 255u;
 
-            file << v.x << ' ' << v.y << ' ' << v.z << ' '
-                 << v.nx << ' ' << v.ny << ' ' << v.nz << ' '
+            file << vtx.x  << ' ' << vtx.y  << ' ' << vtx.z  << ' '
+                 << vtx.nx << ' ' << vtx.ny << ' ' << vtx.nz << ' '
                  << int(r) << ' ' << int(g) << ' ' << int(b) << ' ' << int(a) << '\n';
         }
 
-        if (options.mode == MeshMode::Wireframe) {
-            for (std::size_t i = 0; i + 1 < mesh.indices.size(); i += 2) {
+        if (mesh.wireframe) {
+            for (std::size_t i = 0; i + 1 < mesh.indices.size(); i += 2)
                 file << mesh.indices[i] << ' ' << mesh.indices[i + 1] << '\n';
-            }
         } else {
-            for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
                 file << "3 " << mesh.indices[i] << ' ' << mesh.indices[i + 1] << ' ' << mesh.indices[i + 2] << '\n';
-            }
         }
 
         return file.good();
     }
 
+    // ================================================================
+    // BuildMergedRects — greedy rectangle expansion + avgDepth
+    // ================================================================
 
     static bool BuildMergedRects(std::span<const PixelCell> cells,
-                                 std::uint32_t sampleW,
-                                 std::uint32_t sampleH,
-                                 std::vector<MergeRect>& outRects)
+                                 std::uint32_t              sampleW,
+                                 std::uint32_t              sampleH,
+                                 std::vector<MergeRect>&    outRects)
     {
         outRects.clear();
 
@@ -140,8 +153,6 @@ namespace pelpaint::exporter {
         auto sameCell = [](const PixelCell& a, const PixelCell& b) noexcept -> bool {
             return a.valid == b.valid &&
                    a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
-                   // optionally add depth quantization here:
-                   // && std::abs(a.depth - b.depth) < 0.02f;
         };
 
         for (std::uint32_t y = 0; y < sampleH; ++y) {
@@ -178,27 +189,38 @@ namespace pelpaint::exporter {
                 }
 
                 // Mark region visited
-                for (std::uint32_t dy = 0; dy < h; ++dy) {
-                    for (std::uint32_t dx = 0; dx < w; ++dx) {
+                for (std::uint32_t dy = 0; dy < h; ++dy)
+                    for (std::uint32_t dx = 0; dx < w; ++dx)
                         visited[idxOf(x + dx, y + dy)] = 1;
-                    }
-                }
 
-                outRects.push_back(MergeRect{ x, y, w, h, seed });
+                // Average depth across all cells in the rect
+                float totalDepth = 0.0f;
+                for (std::uint32_t dy = 0; dy < h; ++dy)
+                    for (std::uint32_t dx = 0; dx < w; ++dx)
+                        totalDepth += cells[idxOf(x + dx, y + dy)].depth;
+
+                MergeRect mr{ x, y, w, h, seed };
+                mr.avgDepth = (w * h > 0) ? totalDepth / static_cast<float>(w * h) : seed.depth;
+                outRects.push_back(mr);
             }
         }
 
         return true;
     }
 
-    bool MeshExporter::BuildSolidMesh(const pelpaint::ImageView& view,
-                                      std::span<const float> depthMap,
-                                      std::uint32_t gridSize,
-                                      float depthScale,
-                                      MeshData& outMesh)
+    // ================================================================
+    // BuildPlaneMesh — continuous height-mapped terrain grid
+    // ================================================================
+
+    bool MeshExporter::BuildPlaneMesh(const pelpaint::ImageView& view,
+                                      std::span<const float>     depthMap,
+                                      std::uint32_t              gridSize,
+                                      float                      depthScale,
+                                      MeshData&                  outMesh)
     {
         outMesh.vertices.clear();
         outMesh.indices.clear();
+        outMesh.wireframe = false;
 
         if (!view.valid() || view.data == nullptr || view.channels < 4) return false;
         if (gridSize == 0 || depthScale == 0.0f) return false;
@@ -218,12 +240,16 @@ namespace pelpaint::exporter {
 
         // Build vertices
         for (std::size_t sy = 0; sy < sampleH; ++sy) {
-            const std::uint32_t pxY = std::min<std::uint32_t>(static_cast<std::uint32_t>(sy * gridSize), view.height - 1u);
-            const float v = (sampleH > 1) ? (static_cast<float>(sy) / static_cast<float>(sampleH - 1u)) : 0.0f;
+            const std::uint32_t pxY = std::min<std::uint32_t>(
+                static_cast<std::uint32_t>(sy * gridSize), view.height - 1u);
+            const float v = (sampleH > 1)
+                ? (static_cast<float>(sy) / static_cast<float>(sampleH - 1u)) : 0.0f;
 
             for (std::size_t sx = 0; sx < sampleW; ++sx) {
-                const std::uint32_t pxX = std::min<std::uint32_t>(static_cast<std::uint32_t>(sx * gridSize), view.width - 1u);
-                const float u = (sampleW > 1) ? (static_cast<float>(sx) / static_cast<float>(sampleW - 1u)) : 0.0f;
+                const std::uint32_t pxX = std::min<std::uint32_t>(
+                    static_cast<std::uint32_t>(sx * gridSize), view.width - 1u);
+                const float u = (sampleW > 1)
+                    ? (static_cast<float>(sx) / static_cast<float>(sampleW - 1u)) : 0.0f;
 
                 const std::size_t idx = sy * sampleW + sx;
                 const float z = depthMap[idx] * depthScale;
@@ -232,19 +258,12 @@ namespace pelpaint::exporter {
                 vtx.x = static_cast<float>(pxX);
                 vtx.y = static_cast<float>(pxY);
                 vtx.z = z;
-
-                // UVs reserved for later.
                 vtx.u = u;
                 vtx.v = v;
 
-                // Vertex color from source image
                 std::uint8_t r = 255, g = 255, b = 255, a = 255;
                 if (!ReadPixelRGBA8(view, pxX, pxY, r, g, b, a)) return false;
-
-                vtx.r = r;
-                vtx.g = g;
-                vtx.b = b;
-                vtx.a = a;
+                vtx.r = r; vtx.g = g; vtx.b = b; vtx.a = a;
 
                 outMesh.vertices[idx] = vtx;
             }
@@ -257,12 +276,11 @@ namespace pelpaint::exporter {
 
         for (std::size_t y = 0; y + 1 < sampleH; ++y) {
             for (std::size_t x = 0; x + 1 < sampleW; ++x) {
-                const std::uint32_t i0 = vertexIndex(x, y);
+                const std::uint32_t i0 = vertexIndex(x,     y);
                 const std::uint32_t i1 = vertexIndex(x + 1, y);
                 const std::uint32_t i2 = vertexIndex(x + 1, y + 1);
-                const std::uint32_t i3 = vertexIndex(x, y + 1);
+                const std::uint32_t i3 = vertexIndex(x,     y + 1);
 
-                // Two triangles per grid cell
                 outMesh.indices.push_back(i0);
                 outMesh.indices.push_back(i1);
                 outMesh.indices.push_back(i2);
@@ -273,39 +291,31 @@ namespace pelpaint::exporter {
             }
         }
 
-        // Compute normals
+        // Compute gradient-based smooth normals
         for (std::size_t sy = 0; sy < sampleH; ++sy) {
             for (std::size_t sx = 0; sx < sampleW; ++sx) {
                 const std::size_t idx = sy * sampleW + sx;
 
-                const std::size_t xm1 = (sx > 0) ? sx - 1 : sx;
-                const std::size_t xp1 = (sx + 1 < sampleW) ? sx + 1 : sx;
-                const std::size_t ym1 = (sy > 0) ? sy - 1 : sy;
-                const std::size_t yp1 = (sy + 1 < sampleH) ? sy + 1 : sy;
+                const std::size_t xm1 = (sx > 0)            ? sx - 1 : sx;
+                const std::size_t xp1 = (sx + 1 < sampleW)  ? sx + 1 : sx;
+                const std::size_t ym1 = (sy > 0)            ? sy - 1 : sy;
+                const std::size_t yp1 = (sy + 1 < sampleH)  ? sy + 1 : sy;
 
                 const float hl = depthMap[sy * sampleW + xm1] * depthScale;
                 const float hr = depthMap[sy * sampleW + xp1] * depthScale;
                 const float hd = depthMap[ym1 * sampleW + sx] * depthScale;
                 const float hu = depthMap[yp1 * sampleW + sx] * depthScale;
 
-                // Gradient-based normal
-                const float dx = hl - hr;
-                const float dy = hd - hu;
+                const float gx = hl - hr;
+                const float gy = hd - hu;
 
-                float nx = dx;
-                float ny = dy;
+                float nx = gx;
+                float ny = gy;
                 float nz = 2.0f; // strength bias for smoother normals
 
                 const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
-                if (len > 0.0f) {
-                    nx /= len;
-                    ny /= len;
-                    nz /= len;
-                } else {
-                    nx = 0.0f;
-                    ny = 0.0f;
-                    nz = 1.0f;
-                }
+                if (len > 0.0f) { nx /= len; ny /= len; nz /= len; }
+                else             { nx = 0.0f; ny = 0.0f; nz = 1.0f; }
 
                 outMesh.vertices[idx].nx = nx;
                 outMesh.vertices[idx].ny = ny;
@@ -316,17 +326,75 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    bool MeshExporter::BuildWireframeMesh(const pelpaint::ImageView& view,
-                                          std::span<const float> depthMap,
-                                          std::uint32_t gridSize,
-                                          float depthScale,
-                                          MeshData& outMesh)
-    {
-        outMesh.vertices.clear();
-        outMesh.indices.clear();
+    // ================================================================
+    // PushVertex — append a vertex and return its index
+    // ================================================================
 
+    static std::uint32_t PushVertex(MeshData&    mesh,
+                                    float x, float y, float z,
+                                    float nx, float ny, float nz,
+                                    std::uint8_t r, std::uint8_t g,
+                                    std::uint8_t b, std::uint8_t a)
+    {
+        MeshVertex vtx{};
+        vtx.x  = x;  vtx.y  = y;  vtx.z  = z;
+        vtx.nx = nx; vtx.ny = ny; vtx.nz = nz;
+        vtx.r  = r;  vtx.g  = g;  vtx.b  = b;  vtx.a = a;
+        mesh.vertices.push_back(vtx);
+        return static_cast<std::uint32_t>(mesh.vertices.size() - 1u);
+    }
+
+    // ================================================================
+    // EmitFlatTri — flat-shaded triangle (non-shared vertices)
+    // ================================================================
+
+    static void EmitFlatTri(MeshData& mesh,
+                            float ax, float ay, float az,
+                            float bx, float by, float bz,
+                            float cx, float cy, float cz,
+                            std::uint8_t r, std::uint8_t g,
+                            std::uint8_t b, std::uint8_t a)
+    {
+        // Face normal via cross product
+        const float ux = bx - ax, uy = by - ay, uz = bz - az;
+        const float vx = cx - ax, vy = cy - ay, vz = cz - az;
+        float nx = uy * vz - uz * vy;
+        float ny = uz * vx - ux * vz;
+        float nz = ux * vy - uy * vx;
+        const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 1e-6f) { nx /= len; ny /= len; nz /= len; }
+        else              { nx = 0.0f; ny = 0.0f; nz = 1.0f; }
+
+        const auto i0 = PushVertex(mesh, ax, ay, az, nx, ny, nz, r, g, b, a);
+        const auto i1 = PushVertex(mesh, bx, by, bz, nx, ny, nz, r, g, b, a);
+        const auto i2 = PushVertex(mesh, cx, cy, cz, nx, ny, nz, r, g, b, a);
+        mesh.indices.push_back(i0);
+        mesh.indices.push_back(i1);
+        mesh.indices.push_back(i2);
+    }
+
+    // ================================================================
+    // GridVertex / BuildLoPolyGrid / TriVariance
+    //   Shared helpers for LoPoly and Wireframe.
+    // ================================================================
+
+    struct GridVertex {
+        float        x = 0.0f, y = 0.0f, z = 0.0f;
+        std::uint8_t r = 255,  g = 255,  b = 255,  a = 255;
+    };
+
+    /// Build a flat sampleW × sampleH array of grid vertices.
+    static bool BuildLoPolyGrid(const pelpaint::ImageView& view,
+                                std::span<const float>     depthMap,
+                                std::uint32_t              gridSize,
+                                float                      depthScale,
+                                std::uint8_t               alphaThreshold,
+                                std::size_t&               outSampleW,
+                                std::size_t&               outSampleH,
+                                std::vector<GridVertex>&   outGrid)
+    {
         if (!view.valid() || view.data == nullptr || view.channels < 4) return false;
-        if (gridSize == 0 || depthScale == 0.0f) return false;
+        if (gridSize == 0) return false;  // depthScale==0 is allowed (flatZ mode -> all Z=0)
 
         const std::size_t sampleW = SampleWidth(view.width, gridSize);
         const std::size_t sampleH = SampleHeight(view.height, gridSize);
@@ -334,101 +402,264 @@ namespace pelpaint::exporter {
         if (depthMap.size() != sampleW * sampleH) return false;
         if (sampleW < 2 || sampleH < 2) return false;
 
+        outSampleW = sampleW;
+        outSampleH = sampleH;
+
         try {
-            outMesh.vertices.resize(sampleW * sampleH);
-            // Wireframe line list: each cell contributes edges
-            outMesh.indices.reserve((sampleW - 1u) * (sampleH - 1u) * 8u);
+            outGrid.resize(sampleW * sampleH);
         } catch (...) {
             return false;
         }
 
-        // Build vertices same as solid
         for (std::size_t sy = 0; sy < sampleH; ++sy) {
-            const std::uint32_t pxY = std::min<std::uint32_t>(static_cast<std::uint32_t>(sy * gridSize), view.height - 1u);
-            const float v = (sampleH > 1) ? (static_cast<float>(sy) / static_cast<float>(sampleH - 1u)) : 0.0f;
+            const std::uint32_t pxY = std::min<std::uint32_t>(
+                static_cast<std::uint32_t>(sy * gridSize), view.height - 1u);
 
             for (std::size_t sx = 0; sx < sampleW; ++sx) {
-                const std::uint32_t pxX = std::min<std::uint32_t>(static_cast<std::uint32_t>(sx * gridSize), view.width - 1u);
-                const float u = (sampleW > 1) ? (static_cast<float>(sx) / static_cast<float>(sampleW - 1u)) : 0.0f;
+                const std::uint32_t pxX = std::min<std::uint32_t>(
+                    static_cast<std::uint32_t>(sx * gridSize), view.width - 1u);
 
                 const std::size_t idx = sy * sampleW + sx;
-                const float z = depthMap[idx] * depthScale;
-
-                MeshVertex vtx{};
-                vtx.x = static_cast<float>(pxX);
-                vtx.y = static_cast<float>(pxY);
-                vtx.z = z;
-                vtx.u = u;
-                vtx.v = v;
-
                 std::uint8_t r = 255, g = 255, b = 255, a = 255;
                 if (!ReadPixelRGBA8(view, pxX, pxY, r, g, b, a)) return false;
 
-                vtx.r = r;
-                vtx.g = g;
-                vtx.b = b;
-                vtx.a = a;
-
-                outMesh.vertices[idx] = vtx;
+                outGrid[idx] = GridVertex{
+                    static_cast<float>(pxX),
+                    static_cast<float>(pxY),
+                    // Transparent pixels keep Z=0 so they don't distort nearby geometry.
+                    (a >= alphaThreshold) ? depthMap[idx] * depthScale : 0.0f,
+                    r, g, b, a
+                };
             }
         }
+        return true;
+    }
 
-        auto vertexIndex = [sampleW](std::size_t x, std::size_t y) noexcept -> std::uint32_t {
-            return static_cast<std::uint32_t>(y * sampleW + x);
+    /// Colour variance of a triangle (sum of squared channel deviations from mean).
+    static float TriVariance(const GridVertex& p,
+                             const GridVertex& q,
+                             const GridVertex& r) noexcept
+    {
+        auto sq = [](float x) noexcept { return x * x; };
+        const float mr = (static_cast<float>(p.r) + q.r + r.r) / 3.0f;
+        const float mg = (static_cast<float>(p.g) + q.g + r.g) / 3.0f;
+        const float mb = (static_cast<float>(p.b) + q.b + r.b) / 3.0f;
+        return sq(p.r - mr) + sq(p.g - mg) + sq(p.b - mb)
+             + sq(q.r - mr) + sq(q.g - mg) + sq(q.b - mb)
+             + sq(r.r - mr) + sq(r.g - mg) + sq(r.b - mb);
+    }
+
+    // ================================================================
+    // BuildLoPolyMesh — adaptive-diagonal flat-shaded triangulation
+    // ================================================================
+
+    bool MeshExporter::BuildLoPolyMesh(const pelpaint::ImageView& view,
+                                       std::span<const float>     depthMap,
+                                       std::uint32_t              gridSize,
+                                       float                      depthScale,
+                                       const MeshExportOptions&   options,
+                                       MeshData&                  outMesh)
+    {
+        outMesh.vertices.clear();
+        outMesh.indices.clear();
+        outMesh.wireframe = false;
+
+        // flatZ=true: pass depthScale=0 so every Z = depthMap*0 = 0 (pure flat mesh)
+        const float effectiveDepthScale = options.flatZ ? 0.0f : depthScale;
+
+        std::size_t sampleW = 0, sampleH = 0;
+        std::vector<GridVertex> grid;
+        if (!BuildLoPolyGrid(view, depthMap, gridSize, effectiveDepthScale, options.alphaThreshold, sampleW, sampleH, grid))
+            return false;
+
+        const std::size_t quadW = sampleW - 1;
+        const std::size_t quadH = sampleH - 1;
+
+        try {
+            outMesh.vertices.reserve(quadW * quadH * 6u);
+            outMesh.indices.reserve(quadW * quadH * 6u);
+        } catch (...) {
+            return false;
+        }
+
+        auto gv = [&](std::size_t sx, std::size_t sy) noexcept -> const GridVertex& {
+            return grid[sy * sampleW + sx];
         };
 
-        // Emit grid line segments:
-        // horizontal lines
-        for (std::size_t y = 0; y < sampleH; ++y) {
-            for (std::size_t x = 0; x + 1 < sampleW; ++x) {
-                outMesh.indices.push_back(vertexIndex(x, y));
-                outMesh.indices.push_back(vertexIndex(x + 1, y));
-            }
-        }
+        // Integer-average colour of three grid vertices
+        auto avgCol = [](const GridVertex& p, const GridVertex& q, const GridVertex& r) noexcept
+            -> std::tuple<std::uint8_t, std::uint8_t, std::uint8_t, std::uint8_t>
+        {
+            return {
+                static_cast<std::uint8_t>((static_cast<int>(p.r) + q.r + r.r) / 3),
+                static_cast<std::uint8_t>((static_cast<int>(p.g) + q.g + r.g) / 3),
+                static_cast<std::uint8_t>((static_cast<int>(p.b) + q.b + r.b) / 3),
+                static_cast<std::uint8_t>((static_cast<int>(p.a) + q.a + r.a) / 3)
+            };
+        };
 
-        // vertical lines
-        for (std::size_t y = 0; y + 1 < sampleH; ++y) {
-            for (std::size_t x = 0; x < sampleW; ++x) {
-                outMesh.indices.push_back(vertexIndex(x, y));
-                outMesh.indices.push_back(vertexIndex(x, y + 1));
+        for (std::size_t sy = 0; sy < quadH; ++sy) {
+            for (std::size_t sx = 0; sx < quadW; ++sx) {
+                // Corners: A=top-left, B=top-right, C=bottom-left, D=bottom-right
+                const GridVertex& A = gv(sx,     sy);
+                const GridVertex& B = gv(sx + 1, sy);
+                const GridVertex& C = gv(sx,     sy + 1);
+                const GridVertex& D = gv(sx + 1, sy + 1);
+
+                // Option 1 (A-D diagonal): {A,B,D} + {A,D,C}
+                const float cost1 = TriVariance(A, B, D) + TriVariance(A, D, C);
+                // Option 2 (B-C diagonal): {A,B,C} + {B,D,C}
+                const float cost2 = TriVariance(A, B, C) + TriVariance(B, D, C);
+
+                if (cost1 <= cost2) {
+                    auto [cr,  cg,  cb,  ca]  = avgCol(A, B, D);
+                    if (ca >= options.alphaThreshold)
+                        EmitFlatTri(outMesh,
+                            A.x, A.y, A.z, B.x, B.y, B.z, D.x, D.y, D.z, cr, cg, cb, ca);
+                    auto [cr2, cg2, cb2, ca2] = avgCol(A, D, C);
+                    if (ca2 >= options.alphaThreshold)
+                        EmitFlatTri(outMesh,
+                            A.x, A.y, A.z, D.x, D.y, D.z, C.x, C.y, C.z, cr2, cg2, cb2, ca2);
+                } else {
+                    auto [cr,  cg,  cb,  ca]  = avgCol(A, B, C);
+                    if (ca >= options.alphaThreshold)
+                        EmitFlatTri(outMesh,
+                            A.x, A.y, A.z, B.x, B.y, B.z, C.x, C.y, C.z, cr, cg, cb, ca);
+                    auto [cr2, cg2, cb2, ca2] = avgCol(B, D, C);
+                    if (ca2 >= options.alphaThreshold)
+                        EmitFlatTri(outMesh,
+                            B.x, B.y, B.z, D.x, D.y, D.z, C.x, C.y, C.z, cr2, cg2, cb2, ca2);
+                }
             }
         }
 
         return true;
     }
 
-    static std::uint32_t PushVertex(MeshData& mesh,
-                                    float x, float y, float z,
-                                    float nx, float ny, float nz,
-                                    std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a)
-    {
-        MeshVertex vtx{};
-        vtx.x = x;
-        vtx.y = y;
-        vtx.z = z;
-        vtx.nx = nx;
-        vtx.ny = ny;
-        vtx.nz = nz;
-        vtx.r = r;
-        vtx.g = g;
-        vtx.b = b;
-        vtx.a = a;
+    // ================================================================
+    // BuildWireframeMesh — edge skeleton of the LoPoly triangulation
+    // ================================================================
 
-        mesh.vertices.push_back(vtx);
-        return static_cast<std::uint32_t>(mesh.vertices.size() - 1u);
+    bool MeshExporter::BuildWireframeMesh(const pelpaint::ImageView& view,
+                                          std::span<const float>     depthMap,
+                                          std::uint32_t              gridSize,
+                                          float                      depthScale,
+                                          const MeshExportOptions&   options,
+                                          MeshData&                  outMesh)
+    {
+        outMesh.vertices.clear();
+        outMesh.indices.clear();
+        outMesh.wireframe = true;
+
+        // flatZ=true: pass depthScale=0 so every Z = depthMap*0 = 0 (pure flat mesh)
+        const float effectiveDepthScale = options.flatZ ? 0.0f : depthScale;
+
+        std::size_t sampleW = 0, sampleH = 0;
+        std::vector<GridVertex> grid;
+        if (!BuildLoPolyGrid(view, depthMap, gridSize, effectiveDepthScale, options.alphaThreshold, sampleW, sampleH, grid))
+            return false;
+
+        const std::size_t quadW = sampleW - 1;
+        const std::size_t quadH = sampleH - 1;
+
+        // Copy shared vertices into outMesh
+        try {
+            outMesh.vertices.resize(sampleW * sampleH);
+        } catch (...) {
+            return false;
+        }
+        for (std::size_t i = 0; i < grid.size(); ++i) {
+            const GridVertex& gv = grid[i];
+            MeshVertex vtx{};
+            vtx.x = gv.x; vtx.y = gv.y; vtx.z = gv.z;
+            vtx.nx = 0.0f; vtx.ny = 0.0f; vtx.nz = 1.0f;
+            vtx.r = gv.r; vtx.g = gv.g; vtx.b = gv.b; vtx.a = gv.a;
+            outMesh.vertices[i] = vtx;
+        }
+
+        // Helpers
+        auto vIdx = [sampleW](std::size_t sx, std::size_t sy) noexcept -> std::uint32_t {
+            return static_cast<std::uint32_t>(sy * sampleW + sx);
+        };
+        auto gvAt = [&](std::size_t sx, std::size_t sy) noexcept -> const GridVertex& {
+            return grid[sy * sampleW + sx];
+        };
+
+        // Collect de-duplicated edges via a set of {min, max} index pairs.
+        // Skip any edge where either endpoint vertex is below the alpha threshold.
+        std::set<std::pair<std::uint32_t, std::uint32_t>> edgeSet;
+
+        auto addEdge = [&](std::uint32_t a, std::uint32_t b) {
+            if (grid[a].a < options.alphaThreshold || grid[b].a < options.alphaThreshold) return;
+            if (a > b) std::swap(a, b);
+            edgeSet.emplace(a, b);
+        };
+
+        for (std::size_t sy = 0; sy < quadH; ++sy) {
+            for (std::size_t sx = 0; sx < quadW; ++sx) {
+                const std::uint32_t iA = vIdx(sx,     sy);
+                const std::uint32_t iB = vIdx(sx + 1, sy);
+                const std::uint32_t iC = vIdx(sx,     sy + 1);
+                const std::uint32_t iD = vIdx(sx + 1, sy + 1);
+
+                const GridVertex& gA = gvAt(sx,     sy);
+                const GridVertex& gB = gvAt(sx + 1, sy);
+                const GridVertex& gC = gvAt(sx,     sy + 1);
+                const GridVertex& gD = gvAt(sx + 1, sy + 1);
+
+                const float cost1 = TriVariance(gA, gB, gD) + TriVariance(gA, gD, gC);
+                const float cost2 = TriVariance(gA, gB, gC) + TriVariance(gB, gD, gC);
+
+                if (cost1 <= cost2) {
+                    // Triangle {A,B,D}
+                    addEdge(iA, iB);
+                    addEdge(iB, iD);
+                    addEdge(iA, iD);
+                    // Triangle {A,D,C}
+                    addEdge(iA, iD);
+                    addEdge(iD, iC);
+                    addEdge(iA, iC);
+                } else {
+                    // Triangle {A,B,C}
+                    addEdge(iA, iB);
+                    addEdge(iB, iC);
+                    addEdge(iA, iC);
+                    // Triangle {B,D,C}
+                    addEdge(iB, iD);
+                    addEdge(iD, iC);
+                    addEdge(iB, iC);
+                }
+            }
+        }
+
+        try {
+            outMesh.indices.reserve(edgeSet.size() * 2u);
+        } catch (...) {
+            return false;
+        }
+        for (const auto& [a, b] : edgeSet) {
+            outMesh.indices.push_back(a);
+            outMesh.indices.push_back(b);
+        }
+
+        return true;
     }
 
+    // ================================================================
+    // BuildPixelCells — one PixelCell per grid cell (centre sample)
+    // ================================================================
+
     static bool BuildPixelCells(const pelpaint::ImageView& view,
-                                std::span<const float> depthMap,
-                                std::uint32_t gridSize,
-                                std::vector<PixelCell>& outCells)
+                                std::span<const float>     depthMap,
+                                std::uint32_t              gridSize,
+                                std::vector<PixelCell>&    outCells)
     {
         outCells.clear();
 
         if (!view.valid() || view.data == nullptr || view.channels < 4) return false;
         if (gridSize == 0) return false;
 
-        const std::size_t sampleW = SampleWidth(view.width, gridSize);
+        const std::size_t sampleW = SampleWidth(view.width,  gridSize);
         const std::size_t sampleH = SampleHeight(view.height, gridSize);
 
         if (depthMap.size() != sampleW * sampleH) return false;
@@ -440,34 +671,25 @@ namespace pelpaint::exporter {
         }
 
         for (std::size_t sy = 0; sy < sampleH; ++sy) {
-            const std::uint32_t baseY = static_cast<std::uint32_t>(sy * gridSize);
-            const std::uint32_t centerY = ClampU32(
-                baseY + (gridSize / 2u),
-                0u,
-                view.height - 1u
-            );
+            const std::uint32_t baseY   = static_cast<std::uint32_t>(sy * gridSize);
+            const std::uint32_t centerY = ClampU32(baseY + (gridSize / 2u), 0u, view.height - 1u);
 
             for (std::size_t sx = 0; sx < sampleW; ++sx) {
-                const std::uint32_t baseX = static_cast<std::uint32_t>(sx * gridSize);
-                const std::uint32_t centerX = ClampU32(
-                    baseX + (gridSize / 2u),
-                    0u,
-                    view.width - 1u
-                );
+                const std::uint32_t baseX   = static_cast<std::uint32_t>(sx * gridSize);
+                const std::uint32_t centerX = ClampU32(baseX + (gridSize / 2u), 0u, view.width - 1u);
 
                 const std::size_t idx = sy * sampleW + sx;
 
                 std::uint8_t r = 0, g = 0, b = 0, a = 0;
-                if (!ReadPixelRGBA8(view, centerX, centerY, r, g, b, a)) {
+                if (!ReadPixelRGBA8(view, centerX, centerY, r, g, b, a))
                     return false;
-                }
 
                 PixelCell cell{};
                 cell.valid = (a != 0);
-                cell.r = r;
-                cell.g = g;
-                cell.b = b;
-                cell.a = a;
+                cell.r     = r;
+                cell.g     = g;
+                cell.b     = b;
+                cell.a     = a;
                 cell.depth = cell.valid ? Clamp01(depthMap[idx]) : 0.0f;
 
                 outCells[idx] = cell;
@@ -477,40 +699,11 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    static void PushQuad(MeshData& mesh,
-                         std::uint32_t i0, std::uint32_t i1,
-                         std::uint32_t i2, std::uint32_t i3);
+    // ================================================================
+    // PushQuad / EmitPrism — cuboid face helpers for PixelMesh
+    // ================================================================
 
-    static void EmitPrism(MeshData& mesh,
-                          float x0, float y0, float x1, float y1,
-                          float z0, float z1,
-                          std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a)
-    {
-        // Top face vertices
-        const std::uint32_t t0 = PushVertex(mesh, x0, y0, z1, 0, 0, 1, r, g, b, a);
-        const std::uint32_t t1 = PushVertex(mesh, x1, y0, z1, 0, 0, 1, r, g, b, a);
-        const std::uint32_t t2 = PushVertex(mesh, x1, y1, z1, 0, 0, 1, r, g, b, a);
-        const std::uint32_t t3 = PushVertex(mesh, x0, y1, z1, 0, 0, 1, r, g, b, a);
-
-        // Bottom face
-        const std::uint32_t b0 = PushVertex(mesh, x0, y0, z0, 0, 0, -1, r, g, b, a);
-        const std::uint32_t b1 = PushVertex(mesh, x1, y0, z0, 0, 0, -1, r, g, b, a);
-        const std::uint32_t b2 = PushVertex(mesh, x1, y1, z0, 0, 0, -1, r, g, b, a);
-        const std::uint32_t b3 = PushVertex(mesh, x0, y1, z0, 0, 0, -1, r, g, b, a);
-
-        // Top
-        PushQuad(mesh, t0, t1, t2, t3);
-        // Bottom
-        PushQuad(mesh, b3, b2, b1, b0);
-
-        // Sides
-        PushQuad(mesh, b0, b1, t1, t0); // front
-        PushQuad(mesh, b1, b2, t2, t1); // right
-        PushQuad(mesh, b2, b3, t3, t2); // back
-        PushQuad(mesh, b3, b0, t0, t3); // left
-    }
-
-    static void PushQuad(MeshData& mesh,
+    static void PushQuad(MeshData&     mesh,
                          std::uint32_t i0, std::uint32_t i1,
                          std::uint32_t i2, std::uint32_t i3)
     {
@@ -523,36 +716,68 @@ namespace pelpaint::exporter {
         mesh.indices.push_back(i3);
     }
 
-    bool MeshExporter::BuildPixelPerfectMesh(const pelpaint::ImageView& view,
-                                             std::span<const float> depthMap,
-                                             std::uint32_t gridSize,
-                                             float depthScale,
-                                             MeshData& outMesh)
+    static void EmitPrism(MeshData&    mesh,
+                          float x0, float y0, float x1, float y1,
+                          float z0, float z1,
+                          std::uint8_t r, std::uint8_t g,
+                          std::uint8_t b, std::uint8_t a)
+    {
+        // Top face (normal +Z)
+        const std::uint32_t t0 = PushVertex(mesh, x0, y0, z1,  0,  0,  1, r, g, b, a);
+        const std::uint32_t t1 = PushVertex(mesh, x1, y0, z1,  0,  0,  1, r, g, b, a);
+        const std::uint32_t t2 = PushVertex(mesh, x1, y1, z1,  0,  0,  1, r, g, b, a);
+        const std::uint32_t t3 = PushVertex(mesh, x0, y1, z1,  0,  0,  1, r, g, b, a);
+
+        // Bottom face (normal -Z)
+        const std::uint32_t b0 = PushVertex(mesh, x0, y0, z0,  0,  0, -1, r, g, b, a);
+        const std::uint32_t b1 = PushVertex(mesh, x1, y0, z0,  0,  0, -1, r, g, b, a);
+        const std::uint32_t b2 = PushVertex(mesh, x1, y1, z0,  0,  0, -1, r, g, b, a);
+        const std::uint32_t b3 = PushVertex(mesh, x0, y1, z0,  0,  0, -1, r, g, b, a);
+
+        PushQuad(mesh, t0, t1, t2, t3);          // top
+        PushQuad(mesh, b3, b2, b1, b0);          // bottom
+        PushQuad(mesh, b0, b1, t1, t0);          // front
+        PushQuad(mesh, b1, b2, t2, t1);          // right
+        PushQuad(mesh, b2, b3, t3, t2);          // back
+        PushQuad(mesh, b3, b0, t0, t3);          // left
+    }
+
+    // ================================================================
+    // BuildPixelMesh — greedy colour-block cuboids (depth-averaged)
+    // ================================================================
+
+    bool MeshExporter::BuildPixelMesh(const pelpaint::ImageView& view,
+                                      std::span<const float>     depthMap,
+                                      std::uint32_t              gridSize,
+                                      float                      depthScale,
+                                      const MeshExportOptions&   options,
+                                      MeshData&                  outMesh)
     {
         outMesh.vertices.clear();
         outMesh.indices.clear();
+        outMesh.wireframe = false;
 
         if (!view.valid() || view.data == nullptr || view.channels < 4) return false;
-        if (gridSize == 0) return false;
-        if (depthScale == 0.0f) return false;
+        if (gridSize == 0 || depthScale == 0.0f) return false;
 
-        const std::size_t sampleW = (view.width + gridSize - 1u) / gridSize;
+        const std::size_t sampleW = (view.width  + gridSize - 1u) / gridSize;
         const std::size_t sampleH = (view.height + gridSize - 1u) / gridSize;
 
         if (depthMap.size() != sampleW * sampleH) return false;
 
         std::vector<PixelCell> cells;
-        if (!BuildPixelCells(view, depthMap, gridSize, cells)) {
+        if (!BuildPixelCells(view, depthMap, gridSize, cells))
             return false;
-        }
 
         std::vector<MergeRect> rects;
-        if (!BuildMergedRects(cells, static_cast<std::uint32_t>(sampleW), static_cast<std::uint32_t>(sampleH), rects)) {
+        if (!BuildMergedRects(cells,
+                              static_cast<std::uint32_t>(sampleW),
+                              static_cast<std::uint32_t>(sampleH),
+                              rects))
             return false;
-        }
 
         try {
-            // Rough reserve estimate: 8 verts per prism, 12 triangles = 36 indices
+            // Rough reserve: 8 verts per prism, 12 quads → 36 triangle indices
             outMesh.vertices.reserve(rects.size() * 8u);
             outMesh.indices.reserve(rects.size() * 36u);
         } catch (...) {
@@ -566,14 +791,16 @@ namespace pelpaint::exporter {
             const float y1 = static_cast<float>((rect.y + rect.h) * gridSize);
 
             const float z0 = 0.0f;
-            const float z1 = rect.cell.depth * depthScale;
+            // flatZ=true: all prisms share the same uniform height (depthScale).
+            // flatZ=false: height is proportional to the average pixel luma in the rect.
+            const float z1 = options.flatZ ? depthScale : rect.avgDepth * depthScale;
 
             EmitPrism(outMesh,
-                      x0, y0, x1, y1,
-                      z0, z1,
+                      x0, y0, x1, y1, z0, z1,
                       rect.cell.r, rect.cell.g, rect.cell.b, rect.cell.a);
         }
 
         return true;
     }
+
 } // namespace pelpaint::exporter

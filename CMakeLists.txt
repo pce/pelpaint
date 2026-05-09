@@ -162,6 +162,16 @@ else()
     set(IMGUI_FILE_DIALOG_SOURCES "")
 endif()
 
+# Catch2 – lightweight unit-test framework (tests only)
+message(STATUS "Fetching Catch2...")
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.6.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(Catch2)
+
 # Main executable
 if(PLATFORM_MACOS OR PLATFORM_IOS)
     # Use .mm extension for Objective-C++ on Apple platforms.
@@ -190,13 +200,21 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         ${IMGUI_FILE_DIALOG_SOURCES}
         src/main.mm
         src/export/MeshExporter.cpp
+        src/export/ProjectSerializer.cpp
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
         src/core/AnimationTimeline.cpp
         src/tools/DrawingAlgorithms.cpp
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
+        src/filters/Filters.cpp
+        src/effects/PaletteCycler.cpp
+        src/effects/AnimFxBaker.cpp
+        src/operators/FrameOperator.cpp
+        src/render/MetalComputeBackend.mm
         src/FileChooser.cpp
+        src/settings/AppSettings.cpp
+        src/ui/SettingsDialog.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
     )
 
@@ -217,13 +235,21 @@ else()
         src/main.cpp
         src/PixelPaintView.cpp
         src/export/MeshExporter.cpp
+        src/export/ProjectSerializer.cpp
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
         src/core/AnimationTimeline.cpp
         src/tools/DrawingAlgorithms.cpp
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
+        src/filters/Filters.cpp
+        src/effects/PaletteCycler.cpp
+        src/effects/AnimFxBaker.cpp
+        src/operators/FrameOperator.cpp
+        src/render/ComputeBackend_cpu.cpp
         src/FileChooser.cpp
+        src/settings/AppSettings.cpp
+        src/ui/SettingsDialog.cpp
     )
 endif()
 
@@ -315,3 +341,53 @@ install(TARGETS ${PROJECT_NAME}
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )
+
+# ============================================================
+# Unit tests  (not built for iOS / Emscripten)
+# ============================================================
+if(NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
+    enable_testing()
+
+    add_executable(pelpaint_tests
+        tests/test_filters.cpp
+        tests/test_save_pipeline.cpp
+        tests/stb_write_impl.cpp
+        src/core/ImageSurface.cpp
+        src/core/Canvas.cpp
+        src/core/AnimationTimeline.cpp
+        src/filters/Filters.cpp
+        src/effects/PaletteCycler.cpp
+        src/effects/AnimFxBaker.cpp
+        src/operators/FrameOperator.cpp
+        src/tools/ParticleSystem.cpp
+    )
+
+    target_include_directories(pelpaint_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(pelpaint_tests PRIVATE
+        Catch2::Catch2WithMain
+        imgui_lib
+    )
+
+    target_compile_definitions(pelpaint_tests PRIVATE NOMINMAX)
+
+    # macOS 15+ kills unsigned executables before they can run.
+    # Ad-hoc sign the test binary right after it is linked so that
+    # catch_discover_tests (PRE_TEST mode) and manual ctest runs both succeed.
+    if(PLATFORM_MACOS)
+        add_custom_command(TARGET pelpaint_tests POST_BUILD
+            COMMAND codesign --force --sign - "$<TARGET_FILE:pelpaint_tests>"
+            COMMENT "Ad-hoc signing pelpaint_tests"
+            VERBATIM
+        )
+    endif()
+
+    include(CTest)
+    include(Catch)
+    # PRE_TEST: discover test cases when CTest first runs them, not at build
+    # time.  This avoids the race between the sign step and the Catch2
+    # post-build discovery script on Xcode-generator builds.
+    catch_discover_tests(pelpaint_tests DISCOVERY_MODE PRE_TEST)
+endif()

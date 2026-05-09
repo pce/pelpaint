@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../ColorPalettes.hpp"
-#include "../PixelPaintView.hpp"
+#include "../core/Error.hpp"
 #include "DepthMapGenerator.hpp"
 #include "ExportUtils.hpp"
 #include "stb/stb_image_write.h"
@@ -236,6 +236,64 @@ public:
             gray.data(),
             static_cast<int>(sampleW)
         ) != 0;
+    }
+
+    // ---- std::expected-based overloads -----------------------------------
+
+    /// Save PNG; returns Error on failure so callers can chain with .or_else().
+    [[nodiscard]]
+    static std::expected<void, pelpaint::Error>
+    SaveToPNGExpected(const std::string& filename,
+                      const pelpaint::ImageView& view)
+    {
+        if (!SaveToPNG(filename, view))
+            return std::unexpected(pelpaint::Error::FileIO("PNG write failed"));
+        return {};
+    }
+
+    /// Save TGA; returns Error on failure.
+    [[nodiscard]]
+    static std::expected<void, pelpaint::Error>
+    SaveToTGAExpected(const std::string& filename,
+                      const pelpaint::ImageView& view)
+    {
+        if (!SaveToTGA(filename, view))
+            return std::unexpected(pelpaint::Error::FileIO("TGA write failed"));
+        return {};
+    }
+
+    /// Save depth-map PNG; returns Error on failure.
+    [[nodiscard]]
+    static std::expected<void, pelpaint::Error>
+    SaveDepthMapExpected(const pelpaint::ImageView& view,
+                         std::uint32_t              gridSize,
+                         const std::string&         filename)
+    {
+        if (!SaveDepthMap(view, gridSize, filename))
+            return std::unexpected(pelpaint::Error::FileIO("Depth map save failed"));
+        return {};
+    }
+
+    /// Save pixel-art SVG (optimized greedy-rect merging); returns Error on failure.
+    [[nodiscard]]
+    static std::expected<void, pelpaint::Error>
+    SaveToSVGOptimizedExpected(const std::string& filename,
+                               const pelpaint::ImageView& view)
+    {
+        if (!SaveToSVGOptimized(filename, view))
+            return std::unexpected(pelpaint::Error::FileIO("SVG pixel save failed"));
+        return {};
+    }
+
+    /// Save vector-styled SVG (rounded rects); returns Error on failure.
+    [[nodiscard]]
+    static std::expected<void, pelpaint::Error>
+    SaveToSVGVectorExpected(const std::string& filename,
+                            const pelpaint::ImageView& view)
+    {
+        if (!SaveToSVGVector(filename, view))
+            return std::unexpected(pelpaint::Error::FileIO("SVG vector save failed"));
+        return {};
     }
 };
 } // namespace pelpaint::exporter

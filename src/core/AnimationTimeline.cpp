@@ -1,4 +1,5 @@
 #include "AnimationTimeline.hpp"
+#include "../ColorPalettes.hpp"    // pelpaint::Pixel (layout-compatible with PixelRGBA8)
 
 #include <algorithm>
 #include <stdexcept>
@@ -30,15 +31,7 @@ int AnimationTimeline::DuplicateFrame(int index)
     AnimationFrame copy;
     const AnimationFrame& src = frames_[static_cast<std::size_t>(index)];
 
-    copy.surface = ImageSurface(width_, height_);
-    for (std::uint32_t ty = 0; ty < src.surface.TilesY(); ++ty) {
-        for (std::uint32_t tx = 0; tx < src.surface.TilesX(); ++tx) {
-            auto srcSpan = src.surface.TilePixels(tx, ty);
-            if (srcSpan.empty()) continue;
-            auto dstSpan = copy.surface.TilePixelsMutable(tx, ty);
-            std::copy(srcSpan.begin(), srcSpan.end(), dstSpan.begin());
-        }
-    }
+    copy.surface = src.surface;  // Deep copy of all tiles and dirty flags.
     copy.delay = src.delay;
     copy.label = src.label + " (copy)";
 
@@ -207,6 +200,92 @@ void AnimationTimeline::Resize(std::uint32_t newW, std::uint32_t newH)
     height_ = newH;
     for (auto& f : frames_)
         f.surface.Resize(newW, newH);
+}
+
+// ---- Operator pipeline integration -----------------------------------
+
+int AnimationTimeline::DeriveFrame(int                     sourceIndex,
+                                    operators::FramePipeline pipeline,
+                                    operators::DrawMode      mode)
+{
+    if (sourceIndex < 0 || sourceIndex >= static_cast<int>(frames_.size()))
+        throw std::out_of_range("DeriveFrame: sourceIndex out of range");
+
+    AnimationFrame f;
+    f.surface       = ImageSurface(width_, height_);
+    f.label         = "Frame " + std::to_string(static_cast<int>(frames_.size()) + 1)
+                      + " (derived)";
+    f.sourceFrame   = sourceIndex;
+    f.pipeline      = std::move(pipeline);
+    f.mode          = mode;
+    f.pipelineDirty = true;
+
+    frames_.push_back(std::move(f));
+    return static_cast<int>(frames_.size()) - 1;
+}
+
+std::expected<void, pelpaint::Error>
+AnimationTimeline::BakeFrame(int frameIndex)
+{
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(frames_.size()))
+        return std::unexpected(pelpaint::Error{
+            pelpaint::ErrorCode::OutOfBounds, "BakeFrame: index out of range"});
+
+    AnimationFrame& f = frames_[static_cast<std::size_t>(frameIndex)];
+
+    // Nothing to bake for direct frames.
+    if (f.sourceFrame < 0 || f.pipeline.Empty()) {
+        f.pipelineDirty = false;
+        return {};
+    }
+    if (f.sourceFrame >= static_cast<int>(frames_.size()))
+        return std::unexpected(pelpaint::Error{
+            pelpaint::ErrorCode::OutOfBounds, "BakeFrame: sourceFrame out of range"});
+
+    const AnimationFrame& src = frames_[static_cast<std::size_t>(f.sourceFrame)];
+
+    // Flatten source surface into a contiguous RGBA8 buffer.
+    const ImageView srcView = src.surface.Flatten();
+
+    // Reinterpret PixelRGBA8* as pelpaint::Pixel* — binary layout-compatible.
+    const auto*    pixBase  = reinterpret_cast<const pelpaint::Pixel*>(srcView.data);
+    const std::size_t nPx   = static_cast<std::size_t>(width_) * height_;
+    const std::span<const pelpaint::Pixel> srcSpan{pixBase, nPx};
+
+    // Run the pipeline.
+    auto result = f.pipeline.Apply(srcSpan,
+                                   static_cast<int>(width_),
+                                   static_cast<int>(height_),
+                                   f.mode);
+    if (!result)
+        return std::unexpected(result.error());
+
+    const std::vector<pelpaint::Pixel>& outPx = *result;
+
+    // Write output back into the frame's tiled surface via the canonical
+    // WriteFlat path (row-wise copy — SIMD-friendly, no manual tile indexing).
+    f.surface.WriteFlat(std::span<const PixelRGBA8>{
+        reinterpret_cast<const PixelRGBA8*>(outPx.data()), outPx.size()});
+
+    f.pipelineDirty = false;
+    return {};
+}
+
+void AnimationTimeline::BakeAllDirty()
+{
+    for (int i = 0, n = static_cast<int>(frames_.size()); i < n; ++i) {
+        if (frames_[static_cast<std::size_t>(i)].pipelineDirty)
+            BakeFrame(i)
+                .or_else([](const pelpaint::Error&)
+                         -> std::expected<void, pelpaint::Error> { return {}; });
+    }
+}
+
+void AnimationTimeline::MarkDependentsDirty(int sourceIndex) noexcept
+{
+    for (auto& f : frames_)
+        if (f.sourceFrame == sourceIndex)
+            f.pipelineDirty = true;
 }
 
 } // namespace pelpaint::core

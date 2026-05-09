@@ -4,7 +4,8 @@
 #include <algorithm>
 #include <fstream>
 #include <limits>
-#include "../PixelPaintView.hpp"
+#include "../core/Types.hpp"
+#include "../core/Error.hpp"
 
 namespace pelpaint::exporter {
 
@@ -51,6 +52,26 @@ static inline bool ReadPixelRGBA8(const pelpaint::ImageView& view,
     b = p[2];
     a = p[3];
     return true;
+}
+
+/// Type-safe pixel read returning std::expected.
+/// Replaces out-params with a value; use .and_then() to chain operations.
+[[nodiscard]] static inline std::expected<pelpaint::Pixel, pelpaint::Error>
+ReadPixelSafe(const pelpaint::ImageView& view,
+              std::uint32_t              x,
+              std::uint32_t              y) noexcept
+{
+    if (x >= view.width || y >= view.height ||
+        view.data == nullptr || view.channels < 4)
+    {
+        return std::unexpected(pelpaint::Error{
+            pelpaint::ErrorCode::OutOfBounds, "Pixel coord out of bounds"});
+    }
+    const std::uint8_t* p =
+        view.data
+        + (static_cast<std::size_t>(y) * view.stride)
+        + (static_cast<std::size_t>(x) * view.channels);
+    return pelpaint::Pixel{p[0], p[1], p[2], p[3]};
 }
 
 

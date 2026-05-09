@@ -29,7 +29,7 @@ public:
     [[nodiscard]] bool        CanUndo()    const noexcept { return undoStack_.size() > 1; }
     [[nodiscard]] bool        CanRedo()    const noexcept { return !redoStack_.empty(); }
     [[nodiscard]] std::size_t UndoCount()  const noexcept { return undoStack_.size(); }
-    [[nodiscard]] std::size_t RedoCount()  const noexcept { return redoStack_.empty() ? 0 : redoStack_.size(); }
+    [[nodiscard]] std::size_t RedoCount()  const noexcept { return redoStack_.size(); }
 
 
     // Push a new snapshot. Clears the redo stack.

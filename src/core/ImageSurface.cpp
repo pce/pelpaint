@@ -158,6 +158,31 @@ bool ImageSurface::GetTileView(std::uint32_t tx, std::uint32_t ty,
     return true;
 }
 
+// WriteFlat — inverse of Flatten: scatter a row-major pixel buffer into tiles.
+// Row-wise std::copy is used so the compiler can auto-vectorise the inner loop.
+void ImageSurface::WriteFlat(std::span<const PixelRGBA8> pixels)
+{
+    if (pixels.size() != static_cast<std::size_t>(m_width) * m_height) return;
+
+    for (std::uint32_t ty = 0; ty < m_tilesY; ++ty) {
+        for (std::uint32_t tx = 0; tx < m_tilesX; ++tx) {
+            Tile& tile = EnsureTile(tx, ty);
+            const std::uint32_t tw = TileWidth(tx);
+            const std::uint32_t th = TileHeight(ty);
+
+            for (std::uint32_t row = 0; row < th; ++row) {
+                const std::size_t srcOff =
+                    static_cast<std::size_t>(ty * TileSize + row) * m_width
+                    + static_cast<std::size_t>(tx * TileSize);
+                const PixelRGBA8* srcRow = pixels.data() + srcOff;
+                PixelRGBA8*       dstRow = tile.pixels.data() + row * TileSize;
+                std::copy(srcRow, srcRow + tw, dstRow);
+            }
+            tile.dirty = true;
+        }
+    }
+}
+
 // Flatten: iterates tiles directly (no per-pixel GetPixel overhead).
 // Returns a non-owning view into m_flattenScratch — valid until the next
 // call to Flatten() or Resize().
