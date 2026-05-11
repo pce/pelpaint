@@ -19,11 +19,11 @@ struct Point2f {
     [[nodiscard]] constexpr bool operator==(const Point2f&) const noexcept = default;
 };
 
-inline Point2f ToPoint2f(const ImVec2& v) {
+[[nodiscard]] inline Point2f ToPoint2f(const ImVec2& v) {
     return Point2f{ v.x, v.y };
 }
 
-inline ImVec2 ToImVec2(const Point2f& p) {
+[[nodiscard]] inline ImVec2 ToImVec2(const Point2f& p) {
     return ImVec2(p.x, p.y);
 }
 
@@ -34,7 +34,7 @@ struct Point2i {
     [[nodiscard]] constexpr bool operator==(const Point2i&) const noexcept = default;
 };
 
-// RGBA float color — replaces ImVec4 inside non-UI structs (e.g. Layer tint)
+/// RGBA float color — replaces ImVec4 inside non-UI structs (e.g. Layer tint)
 struct Color4f {
     float r = 1.0f;
     float g = 1.0f;
@@ -44,7 +44,7 @@ struct Color4f {
     [[nodiscard]] constexpr bool operator==(const Color4f&) const noexcept = default;
 };
 
-// Non-owning image view (RGBA8, borrowed pointer)
+/// Non-owning image view (RGBA8, borrowed pointer)
 struct ImageView {
     const std::uint8_t* data     = nullptr;
     std::uint32_t       width    = 0;
@@ -174,10 +174,6 @@ enum class BrushMode {
     PixelBrush,
 };
 
-// ============================================================
-// Brush settings
-// ============================================================
-
 struct BrushSettings {
     float      size        = 1.0f;
     float      pressure    = 1.0f;   // Apple Pencil / pressure input (0..1)
@@ -217,6 +213,14 @@ struct SelectionData {
     float blurAmount = 0.0f;
 
     enum class Type { Rectangle, Circle, Polygon } type = Type::Rectangle;
+};
+
+// Selection shape mode — chosen in the right-panel Selection section.
+// Decouples the selection shape from the toolbar (single "Sel" button).
+enum class SelectMode {
+    Rectangle,
+    Circle,
+    Polygon,
 };
 
 // Right-panel tab selector

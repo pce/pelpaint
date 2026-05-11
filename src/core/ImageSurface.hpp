@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mdspan>
 #include <span>
 #include <vector>
 #include <utility>
@@ -24,11 +25,11 @@ struct ImageView {
     }
 };
 
-// ---------------------------------------------------------------------------
-// PixelRGBA8 — 4-byte RGBA pixel, same binary layout as pelpaint::Pixel.
-// The two types are layout-compatible; reinterpret_cast between them is safe
-// (verified by static_assert in Canvas.cpp).
-// ---------------------------------------------------------------------------
+/**
+ * 4-byte RGBA pixel, same binary layout as pelpaint::Pixel.
+ * The two types are layout-compatible; reinterpret_cast between them is safe
+ * (verified by static_assert in Canvas.cpp).
+ */
 struct PixelRGBA8 {
     std::uint8_t r = 0;
     std::uint8_t g = 0;
@@ -42,24 +43,22 @@ struct PixelRGBA8 {
     [[nodiscard]] constexpr bool operator==(const PixelRGBA8&) const noexcept = default;
 };
 
-// ---------------------------------------------------------------------------
-// ImageSurface
-//
-// Tile-based RGBA8 image store.
-//   • Canvas pixels are split into TileSize × TileSize tiles.
-//   • Tiles are lazily allocated (transparent pixels require no storage).
-//   • Each tile tracks a dirty flag for incremental GPU upload.
-//
-// Zero-copy access
-//   • TilePixelsMutable(tx,ty) — returns std::span<PixelRGBA8> directly into
-//     the tile's vector; the tile is allocated and marked dirty automatically.
-//   • TilePixels(tx,ty)        — returns std::span<const PixelRGBA8>; returns
-//     an empty span for unallocated (all-transparent) tiles.
-//   • GetTileView(tx,ty,out)   — fills an ImageView for GPU upload (read-only).
-//   • Flatten()                — copies all tiles into a contiguous scratch
-//     buffer and returns a non-owning ImageView (no allocation on repeat calls).
-// ---------------------------------------------------------------------------
-
+/**
+ * Tile-based RGBA8 image store.
+ *
+ * Canvas pixels are split into TileSize × TileSize tiles.
+ * Tiles are lazily allocated (transparent pixels require no storage).
+ * Each tile tracks a dirty flag for incremental GPU upload.
+ *
+ * Zero-copy access:
+ *   - TilePixelsMutable(tx,ty) — returns std::span<PixelRGBA8> directly into
+ *     the tile's vector; the tile is allocated and marked dirty automatically.
+ *   - TilePixels(tx,ty)        — returns std::span<const PixelRGBA8>; returns
+ *     an empty span for unallocated (all-transparent) tiles.
+ *   - GetTileView(tx,ty,out)   — fills an ImageView for GPU upload (read-only).
+ *   - Flatten()                — copies all tiles into a contiguous scratch
+ *     buffer and returns a non-owning ImageView (no allocation on repeat calls).
+ */
 class ImageSurface {
 public:
     static constexpr std::uint32_t TileSize = 64;
@@ -67,20 +66,14 @@ public:
     ImageSurface() = default;
     ImageSurface(std::uint32_t width, std::uint32_t height);
 
-    // ---- Resize / clear ------------------------------------------------
-
     void Resize(std::uint32_t width, std::uint32_t height);
     void Clear(PixelRGBA8 color = {0, 0, 0, 0});
-
-    // ---- Dimensions ----------------------------------------------------
 
     [[nodiscard]] std::uint32_t Width()  const noexcept { return m_width;  }
     [[nodiscard]] std::uint32_t Height() const noexcept { return m_height; }
 
     [[nodiscard]] std::uint32_t TilesX() const noexcept { return m_tilesX; }
     [[nodiscard]] std::uint32_t TilesY() const noexcept { return m_tilesY; }
-
-    // ---- Coordinate helpers (constexpr, zero overhead) -----------------
 
     [[nodiscard]] static constexpr std::uint32_t TileX(std::uint32_t px) noexcept {
         return px / TileSize;
@@ -103,13 +96,9 @@ public:
     [[nodiscard]] std::uint32_t TileWidth (std::uint32_t tx) const noexcept;
     [[nodiscard]] std::uint32_t TileHeight(std::uint32_t ty) const noexcept;
 
-    // ---- Per-pixel access (convenience; prefer spans for bulk ops) ------
-
     [[nodiscard]] bool      IsValidCoord(std::uint32_t x, std::uint32_t y) const noexcept;
     [[nodiscard]] PixelRGBA8 GetPixel(std::uint32_t x, std::uint32_t y)    const noexcept;
     void                     SetPixel(std::uint32_t x, std::uint32_t y, PixelRGBA8 color);
-
-    // ---- Zero-copy tile access -----------------------------------------
 
     // Returns a writable span over the full TileSize×TileSize pixel buffer of
     // tile (tx, ty).  The tile is allocated if needed and marked dirty.
@@ -121,8 +110,6 @@ public:
     // Read-only span.  Returns an empty span for unallocated tiles.
     [[nodiscard]] std::span<const PixelRGBA8> TilePixels(std::uint32_t tx,
                                                           std::uint32_t ty) const noexcept;
-
-    // ---- Dirty tracking ------------------------------------------------
 
     [[nodiscard]] bool HasTile    (std::uint32_t tx, std::uint32_t ty) const noexcept;
     [[nodiscard]] bool IsTileDirty(std::uint32_t tx, std::uint32_t ty) const noexcept;
@@ -136,17 +123,16 @@ public:
 
     void ClearDirtyFlags() noexcept;
 
-    // ---- GPU-upload helpers --------------------------------------------
-
-    // Fill outView with a read-only view into tile (tx, ty)'s pixel buffer.
-    // stride is always TileSize*4 (full-width rows, even for edge tiles).
-    // Returns false if the tile is unallocated.
     bool GetTileView(std::uint32_t tx, std::uint32_t ty, ImageView& outView) const noexcept;
 
     // Flatten all tiles into a contiguous scratch buffer.
     // The returned ImageView borrows that buffer — valid until the next call
     // to Flatten() or Resize().  No heap allocation on repeat calls.
     [[nodiscard]] ImageView Flatten() const;
+
+    using PixelMdspan2d = std::mdspan<
+        const PixelRGBA8,
+        std::extents<std::size_t, std::dynamic_extent, std::dynamic_extent>>;
 
     /// Write a flat (row-major) RGBA8 buffer into the tiled surface.
     /// `pixels` must contain exactly Width() * Height() elements.
@@ -155,9 +141,12 @@ public:
     /// (row-wise std::copy per tile — SIMD-friendly).
     void WriteFlat(std::span<const PixelRGBA8> pixels);
 
-private:
-    // ---- Internal tile bookkeeping -------------------------------------
+    /// Write from a 2D mdspan view (rows x cols) directly into tiles.
+    /// extent(0) must equal Height(), extent(1) must equal Width().
+    /// The mdspan must have the default layout (layout_right / row-major).
+    void WriteFlat(PixelMdspan2d view);
 
+private:
     struct Tile {
         std::vector<PixelRGBA8> pixels;    // TileSize*TileSize entries when allocated
         bool                    allocated = false;

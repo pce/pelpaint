@@ -123,8 +123,9 @@ public:
     [[nodiscard]] std::expected<effects::PaletteCycleResult, Error>
     BakePaletteCycleFrames(core::AnimationTimeline&           tl,
                             const Canvas&                      canvas,
-                            const effects::PaletteCycleConfig& cfg) {
-        return ops_->bake(data_, tl, canvas, cfg);
+                            const effects::PaletteCycleConfig& cfg,
+                            effects::BakeControl               ctl = {}) {
+        return ops_->bake(data_, tl, canvas, cfg, std::move(ctl));
     }
 
     [[nodiscard]] std::expected<std::vector<Pixel>, Error>
@@ -150,7 +151,8 @@ private:
         using BakeFn  = std::expected<effects::PaletteCycleResult, Error>
                         (*)(void*, core::AnimationTimeline&,
                             const Canvas&,
-                            const effects::PaletteCycleConfig&);
+                            const effects::PaletteCycleConfig&,
+                            effects::BakeControl);
         using CycleFn = std::expected<std::vector<Pixel>, Error>
                         (*)(void*, std::span<const Pixel>,
                             int, int,
@@ -183,9 +185,11 @@ inline const Backend::Ops Backend::kOps {
     .bake    = +[](void* p,
                    core::AnimationTimeline& tl,
                    const Canvas& c,
-                   const effects::PaletteCycleConfig& cfg)
+                   const effects::PaletteCycleConfig& cfg,
+                   effects::BakeControl ctl)
                    -> std::expected<effects::PaletteCycleResult, Error> {
-                   return static_cast<B*>(p)->BakePaletteCycleFrames(tl, c, cfg); },
+                   return static_cast<B*>(p)->BakePaletteCycleFrames(
+                       tl, c, cfg, std::move(ctl)); },
 
     .cycle   = +[](void* p,
                    std::span<const Pixel> src, int w, int h,

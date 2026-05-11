@@ -21,12 +21,8 @@ public:
     Canvas(Canvas&&)                 = default;
     Canvas& operator=(Canvas&&)      = default;
 
-    // ---- Dimensions ----------------------------------------------------
-
     [[nodiscard]] int Width()  const noexcept { return width_;  }
     [[nodiscard]] int Height() const noexcept { return height_; }
-
-    // ---- Layer management ----------------------------------------------
 
     // Initialise the default two-layer stack (Background + Foreground).
     void InitDefaultLayers();
@@ -49,32 +45,29 @@ public:
 
     // Mutable reference accessors used by the LayerPanel widget.
     // Staged migration: will be removed once LayerPanel accepts callbacks only.
-    [[nodiscard]] int& ActiveLayerIndexRef() noexcept { return activeLayerIndex_; }
-    [[nodiscard]] int& NextLayerIdRef()      noexcept { return nextLayerId_;      }
+    [[nodiscard]] [[deprecated("Use explicit layer management callbacks instead")]] int& ActiveLayerIndexRef() noexcept { return activeLayerIndex_; }
+    [[nodiscard]] [[deprecated("Use explicit layer management callbacks instead")]] int& NextLayerIdRef()      noexcept { return nextLayerId_;      }
 
-    // ---- Pixel access --------------------------------------------------
-    //
-    // PutPixel writes to the active layer only.
-    // It does NOT composite — call Composite() once per stroke/operation end
-    // (or rely on the per-frame dirty check in PixelPaintApp::Draw()).
-
+    /**
+     * @brief Write a pixel to the active layer only.
+     *
+     * Does NOT composite — call Composite() once per stroke/operation end
+     * (or rely on the per-frame dirty check in PixelPaintApp::Draw()).
+     */
     void                    PutPixel(int x, int y, const Pixel& color) noexcept;
     [[nodiscard]] Pixel     GetPixel(int x, int y)                const noexcept;
     [[nodiscard]] bool      IsValidCoord(int x, int y)            const noexcept;
     [[nodiscard]] int       PixelIndex(int x, int y)              const noexcept;
 
-    // Zero-copy span over the active layer's pixel buffer.
-    // Drawing algorithms (DrawingAlgorithms.hpp) write here directly,
-    // bypassing PutPixel's per-call overhead.
+    /// Zero-copy span over the active layer's pixel buffer.
+    /// Drawing algorithms (DrawingAlgorithms.hpp) write here directly,
+    /// bypassing PutPixel's per-call overhead.
     [[nodiscard]] std::span<Pixel>       ActiveLayerSpan()       noexcept;
     [[nodiscard]] std::span<const Pixel> ActiveLayerSpan() const noexcept;
 
-    // ---- Composite -----------------------------------------------------
-    //
-    // Blends all visible layers (sorted by zIndex) into compositeSurface_
-    // using direct TilePixelsMutable() writes — no intermediate flat buffer.
-    // Clears the dirty flag on return.
-
+    /// Blends all visible layers (sorted by zIndex) into compositeSurface_
+    /// using direct TilePixelsMutable() writes — no intermediate flat buffer.
+    /// Clears the dirty flag on return.
     void Composite();
 
     // Read-only access to the composite result.
@@ -87,17 +80,12 @@ public:
         return compositeSurface_;
     }
 
-    // ---- Dirty flag ----------------------------------------------------
-    //
-    // Set to true by PutPixel and by drawing algorithms via SetDirty().
-    // Cleared by Composite().
-    // PixelPaintApp::Draw() checks this once per frame and calls Composite()
-    // if true — giving live preview with exactly one composite per frame.
-
+    /// Set to true by PutPixel and by drawing algorithms via SetDirty().
+    /// Cleared by Composite().
+    /// PixelPaintApp::Draw() checks this once per frame and calls Composite()
+    /// if true — giving live preview with exactly one composite per frame.
     [[nodiscard]] bool IsDirty() const noexcept { return dirty_; }
     void               SetDirty()      noexcept { dirty_ = true; }
-
-    // ---- Canvas-level operations ---------------------------------------
 
     void Resize(int newW, int newH);
     void Clear(const Pixel& color = {0, 0, 0, 255});

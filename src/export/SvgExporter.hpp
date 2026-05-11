@@ -1,0 +1,170 @@
+#pragma once
+
+#include "ExportUtils.hpp"
+#include "../core/Types.hpp"
+
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <span>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace pelpaint::exporter {
+
+struct SvgExportOptions {
+    int     scale           = 1;     ///< pixels per SVG unit (upscale factor >= 1)
+    bool    skipTransparent = true;  ///< omit fully transparent pixels
+    uint8_t alphaThreshold  = 10;    ///< pixels with alpha below this are considered transparent
+    bool    embedBackground = false; ///< if true, fill the canvas background with bgColor
+    pelpaint::Pixel bgColor = {255, 255, 255, 255};
+};
+
+/**
+ * @brief Pixel-art → SVG exporter.
+ *
+ * @details Algorithm:
+ * 1. Read every pixel from the ImageView.
+ * 2. Group opaque pixels by RGBA color.
+ * 3. For each unique color, apply a greedy row-first maximal-rectangle
+ *    merge (the same strategy used by PixelMesh) to produce a compact
+ *    set of axis-aligned rectangles that tile the region exactly.
+ * 4. Write the SVG document — one <g> element per color, one <rect>
+ *    per merged block.
+ *
+ * The output preserves the canvas pixel-for-pixel with integer
+ * coordinates. Pass a scale factor to upscale the image (e.g. 4 to
+ * make each pixel a 4×4 SVG unit).
+ */
+class SvgExporter {
+public:
+    static bool SaveAsSvg(
+        const std::string&         filename,
+        const pelpaint::ImageView& view,
+        const SvgExportOptions&    opts = {})
+    {
+        if (!view.valid() || view.data == nullptr || view.channels < 4) return false;
+
+        const std::uint32_t W = view.width;
+        const std::uint32_t H = view.height;
+        const int           S = std::max(1, opts.scale);
+
+        // 1. Collect pixels.
+        struct ColorKey {
+            std::uint8_t r, g, b, a;
+            bool operator==(const ColorKey& o) const noexcept {
+                return r == o.r && g == o.g && b == o.b && a == o.a;
+            }
+        };
+        struct ColorHash {
+            std::size_t operator()(const ColorKey& k) const noexcept {
+                return (static_cast<std::size_t>(k.r) << 24)
+                     | (static_cast<std::size_t>(k.g) << 16)
+                     | (static_cast<std::size_t>(k.b) <<  8)
+                     |  static_cast<std::size_t>(k.a);
+            }
+        };
+
+        // visited[y*W+x] = true once the pixel is assigned to a rect
+        std::vector<bool> visited(static_cast<std::size_t>(W * H), false);
+
+        // Pixel data cache
+        std::vector<ColorKey> pixels(static_cast<std::size_t>(W * H));
+        for (std::uint32_t y = 0; y < H; ++y) {
+            for (std::uint32_t x = 0; x < W; ++x) {
+                std::uint8_t r = 0, g = 0, b = 0, a = 255;
+                ReadPixelRGBA8(view, x, y, r, g, b, a);
+                pixels[y * W + x] = {r, g, b, a};
+            }
+        }
+
+        // 2. Group into merged rects per color.
+        struct Rect { std::uint32_t x, y, w, h; };
+        std::unordered_map<ColorKey, std::vector<Rect>, ColorHash> colorRects;
+
+        for (std::uint32_t y = 0; y < H; ++y) {
+            for (std::uint32_t x = 0; x < W; ++x) {
+                const std::size_t idx = y * W + x;
+                if (visited[idx]) continue;
+
+                const ColorKey& col = pixels[idx];
+                if (opts.skipTransparent && col.a < opts.alphaThreshold) {
+                    visited[idx] = true;
+                    continue;
+                }
+
+                // Greedy maximal rectangle: expand right, then down
+                std::uint32_t rw = 1;
+                while (x + rw < W && !visited[y * W + x + rw]
+                       && pixels[y * W + x + rw] == col)
+                    ++rw;
+
+                std::uint32_t rh = 1;
+                bool rowOk = true;
+                while (rowOk && y + rh < H) {
+                    for (std::uint32_t dx = 0; dx < rw; ++dx) {
+                        const std::size_t ci = (y + rh) * W + x + dx;
+                        if (visited[ci] || pixels[ci] != col) { rowOk = false; break; }
+                    }
+                    if (rowOk) ++rh;
+                }
+
+                // Mark visited
+                for (std::uint32_t dy = 0; dy < rh; ++dy)
+                    for (std::uint32_t dx = 0; dx < rw; ++dx)
+                        visited[(y + dy) * W + x + dx] = true;
+
+                colorRects[col].push_back(Rect{x, y, rw, rh});
+            }
+        }
+
+        // 3. Write SVG.
+        std::ofstream f(filename, std::ios::trunc);
+        if (!f.is_open()) return false;
+
+        const std::uint32_t svgW = W * static_cast<std::uint32_t>(S);
+        const std::uint32_t svgH = H * static_cast<std::uint32_t>(S);
+
+        f << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+          << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+          << "width=\"" << svgW << "\" height=\"" << svgH << "\" "
+          << "viewBox=\"0 0 " << svgW << ' ' << svgH << "\">\n";
+        f << "  <!-- Generated by pelpaint -->\n";
+
+        if (opts.embedBackground) {
+            f << "  <rect x=\"0\" y=\"0\" width=\"" << svgW << "\" height=\"" << svgH
+              << "\" fill=\"" << RgbHex(opts.bgColor.r, opts.bgColor.g, opts.bgColor.b)
+              << "\"/>\n";
+        }
+
+        for (const auto& [col, rects] : colorRects) {
+            f << "  <g fill=\"" << RgbHex(col.r, col.g, col.b) << "\"";
+            if (col.a < 255)
+                f << " opacity=\"" << std::fixed << std::setprecision(3)
+                  << (col.a / 255.0f) << "\"";
+            f << ">\n";
+
+            for (const auto& r : rects) {
+                f << "    <rect x=\""  << (r.x * S)
+                  << "\" y=\""         << (r.y * S)
+                  << "\" width=\""     << (r.w * S)
+                  << "\" height=\""    << (r.h * S) << "\"/>\n";
+            }
+            f << "  </g>\n";
+        }
+
+        f << "</svg>\n";
+        return f.good();
+    }
+
+private:
+    static std::string RgbHex(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "#%02x%02x%02x", r, g, b);
+        return std::string(buf);
+    }
+};
+
+} // namespace pelpaint::exporter

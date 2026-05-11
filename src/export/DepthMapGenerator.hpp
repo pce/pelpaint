@@ -15,6 +15,7 @@
 namespace pelpaint::exporter {
     class DepthMapGenerator {
     public:
+    /// @todo Average/coverage-weighted sampling for higher accuracy.
     static bool BuildDepthMap(const pelpaint::ImageView& view,
                                      std::uint32_t gridSize,
                                      std::vector<float>& outDepthMap)
@@ -34,7 +35,6 @@ namespace pelpaint::exporter {
         }
 
         // Fast depth map: one sample per cell, taken from cell center.
-        // TODO: average/coverage-weighted sampling if desired.
         for (std::size_t sy = 0; sy < sampleH; ++sy) {
             const std::uint32_t baseY = static_cast<std::uint32_t>(sy * gridSize);
             const std::uint32_t centerY = ClampU32(
@@ -56,8 +56,8 @@ namespace pelpaint::exporter {
                     return false;
                 }
 
-                // Ignore alpha by treating fully transparent as zero depth.
-                // TODO: add background masking / custom rules here.
+                // Luma-based depth: bright = near, dark = far.
+                // For AlphaDist mode the depth map is replaced in SaveAsMesh post-processing.
                 float depth = (a == 0) ? 0.0f : (LumaFromRGBA(r, g, b) / 255.0f);
 
                 depth = Clamp01(depth);
@@ -68,9 +68,6 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    // ----------------------------------------------------------------
-    // Color modes for the canvas-layer depth visualisation.
-    // ----------------------------------------------------------------
     enum class ColorMode {
         Grayscale  = 0,  // black (far) → white (near)
         FalseColor = 1,  // spectral: dark violet → blue → teal → green → amber → red-pink
@@ -93,7 +90,6 @@ namespace pelpaint::exporter {
             static_cast<std::size_t>(view.width) * view.height;
         outPixels.resize(total);
 
-        // ---- color-stop tables (t, r, g, b) -------------------------
         struct Stop { float t; uint8_t r, g, b; };
 
         static constexpr Stop kGray[] = {
@@ -171,6 +167,7 @@ namespace pelpaint::exporter {
 
     /// std::expected overload for BuildDepthMapRGBA.
     /// Chains cleanly with .and_then() / .transform() / .or_else().
+    /// @note Prefer BuildDepthMapRGBAExpected in new code; enables monadic error chaining.
     [[nodiscard]]
     static std::expected<std::vector<pelpaint::Pixel>, pelpaint::Error>
     BuildDepthMapRGBAExpected(

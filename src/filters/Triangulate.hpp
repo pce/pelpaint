@@ -1,4 +1,3 @@
-// =============================================================================
 // Triangulate.hpp
 //
 // Self-contained implementation of the Triangula-style genetic-algorithm
@@ -10,7 +9,6 @@
 //   TriangulateImage(src, W, H, opts, progressFn = nullptr)
 //
 // TriangulateOptions is defined in Filters.hpp (included below).
-// =============================================================================
 
 #pragma once
 
@@ -27,14 +25,13 @@
 
 namespace pelpaint::filters {
 
-// =============================================================================
-// Internal implementation — hidden in detail_tri namespace
-// =============================================================================
+// Internal implementation detail — detail_tri is a named namespace,
+// not anonymous, because anonymous namespaces in headers would stamp a
+// separate copy of every symbol into each translation unit that includes
+// this file.  All functions are marked inline for ODR compliance.
 namespace detail_tri {
 
-// ---------------------------------------------------------------------------
 // Primitive types
-// ---------------------------------------------------------------------------
 struct Pt   { float x, y; };
 struct Tri  { int   a, b, c; };
 struct Edge { int   a, b;    };
@@ -49,14 +46,12 @@ struct Member {
     std::vector<MutRec> lastMutations;  // filled by mutateMember
 };
 
-// ---------------------------------------------------------------------------
 // Circumcircle test  (double precision; assumes CCW triangle orientation)
 //
 // Returns true when point p lies strictly inside the circumcircle of
 // triangle (a, b, c).  The sign of the determinant flips for CW triangles,
 // so all triangles in the mesh must keep a consistent CCW winding.
-// ---------------------------------------------------------------------------
-[[nodiscard]] static bool inCircumcircle(
+[[nodiscard]] inline bool inCircumcircle(
     const Pt& p, const Pt& a, const Pt& b, const Pt& c) noexcept
 {
     const double ax = a.x - p.x,  ay = a.y - p.y;
@@ -69,14 +64,12 @@ struct Member {
     return det > 0.0;
 }
 
-// ---------------------------------------------------------------------------
 // Bowyer-Watson incremental Delaunay triangulation
 //
 // Super-triangle vertices are ordered CCW so that every triangle produced
 // by the algorithm inherits a consistent CCW winding, keeping the
 // inCircumcircle test sign-correct throughout.
-// ---------------------------------------------------------------------------
-[[nodiscard]] static std::vector<Tri>
+[[nodiscard]] inline std::vector<Tri>
 delaunay(const std::vector<Pt>& pts, int W, int H)
 {
     const int n = static_cast<int>(pts.size());
@@ -116,7 +109,7 @@ delaunay(const std::vector<Pt>& pts, int W, int H)
                 bad.push_back(ti);
         }
 
-        // ---- boundary polygon of the hole --------------------------------
+        // boundary polygon of the hole
         // An edge belongs to the boundary iff it is *not* shared by
         // two distinct bad triangles (it is shared by at most one bad tri
         // plus one good tri — or it is purely on the outer boundary).
@@ -143,19 +136,19 @@ delaunay(const std::vector<Pt>& pts, int W, int H)
             }
         }
 
-        // ---- remove bad triangles (reverse order preserves indices) ------
+        // remove bad triangles (reverse order preserves indices)
         std::sort(bad.rbegin(), bad.rend());
         for (int bi : bad)
             tris.erase(tris.begin() + bi);
 
-        // ---- fill hole with new CCW triangles ----------------------------
+        // fill hole with new CCW triangles
         // Boundary edges are oriented CCW around the hole; connecting
         // {e.a, e.b, newPoint} maintains CCW winding for all new tris.
         for (const Edge& e : boundary)
             tris.push_back({ e.a, e.b, pi });
     }
 
-    // ---- remove triangles that touch the super-triangle vertices ---------
+    // remove triangles that touch the super-triangle vertices
     tris.erase(std::remove_if(tris.begin(), tris.end(),
         [si0, si1, si2](const Tri& t) {
             return t.a == si0 || t.a == si1 || t.a == si2
@@ -166,18 +159,17 @@ delaunay(const std::vector<Pt>& pts, int W, int H)
     return tris;
 }
 
-// ---------------------------------------------------------------------------
-// Scanline helpers
-// ---------------------------------------------------------------------------
-[[nodiscard]] static inline uint8_t clamp8t(int v) noexcept {
+[[nodiscard]] inline uint8_t clamp8t(int v) noexcept {
     return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
 }
 
+// Internal accumulator — not part of the public API.
+// Uses double precision to avoid summation error across large triangles.
 struct AvgColor { double r, g, b, a; int count; };
 
 /// Compute the average RGBA of all non-transparent source pixels inside
 /// triangle (p0, p1, p2) using a horizontal scanline rasterizer.
-[[nodiscard]] static AvgColor computeTriAvgColor(
+[[nodiscard]] inline AvgColor computeTriAvgColor(
     std::span<const pelpaint::Pixel> src,
     int W, int H,
     const Pt& p0, const Pt& p1, const Pt& p2,
@@ -223,7 +215,7 @@ struct AvgColor { double r, g, b, a; int count; };
 /// Paint triangle (p0, p1, p2) into dst with flat colour (r,g,b,a).
 /// Only pixels whose *source* alpha >= alphaThr are overwritten; transparent
 /// source pixels are left unchanged.
-static void rasterizeTriangle(
+inline void rasterizeTriangle(
     std::vector<pelpaint::Pixel>&    dst,
     std::span<const pelpaint::Pixel> src,
     int W, int H,
@@ -263,7 +255,7 @@ static void rasterizeTriangle(
 // ---------------------------------------------------------------------------
 // Render a set of control points as a fully triangulated image
 // ---------------------------------------------------------------------------
-[[nodiscard]] static std::vector<pelpaint::Pixel> renderTriangulation(
+[[nodiscard]] inline std::vector<pelpaint::Pixel> renderTriangulation(
     std::span<const pelpaint::Pixel> src,
     int W, int H,
     const std::vector<Pt>& pts,
@@ -300,7 +292,7 @@ static void rasterizeTriangle(
 // ---------------------------------------------------------------------------
 // Fitness: sum of squared RGB differences over all non-transparent pixels
 // ---------------------------------------------------------------------------
-[[nodiscard]] static double computeSSD(
+[[nodiscard]] inline double computeSSD(
     const std::vector<pelpaint::Pixel>& rendered,
     std::span<const pelpaint::Pixel>    original,
     int N,
@@ -318,7 +310,7 @@ static void rasterizeTriangle(
 }
 
 /// Render + score a member in-place.
-static void evaluateMember(
+inline void evaluateMember(
     Member&                          m,
     std::span<const pelpaint::Pixel> src,
     int W, int H,
@@ -331,7 +323,7 @@ static void evaluateMember(
 // ---------------------------------------------------------------------------
 // Sobel edge-magnitude map (luminance-based, 3×3 kernel)
 // ---------------------------------------------------------------------------
-[[nodiscard]] static std::vector<float> sobelEdgeMap(
+[[nodiscard]] inline std::vector<float> sobelEdgeMap(
     std::span<const pelpaint::Pixel> src, int W, int H)
 {
     std::vector<float> mag(static_cast<size_t>(W * H), 0.0f);
@@ -357,7 +349,7 @@ static void evaluateMember(
 // ---------------------------------------------------------------------------
 // Build the initial point set for one population member
 // ---------------------------------------------------------------------------
-[[nodiscard]] static std::vector<Pt> buildInitialPoints(
+[[nodiscard]] inline std::vector<Pt> buildInitialPoints(
     std::span<const pelpaint::Pixel> src,
     int W, int H,
     int numPoints,
@@ -440,7 +432,7 @@ static void evaluateMember(
 // ---------------------------------------------------------------------------
 // Mutate a member: move `numMutations` random points by Gaussian noise
 // ---------------------------------------------------------------------------
-[[nodiscard]] static Member mutateMember(
+[[nodiscard]] inline Member mutateMember(
     const Member& base,
     int W, int H,
     int numMutations,
@@ -471,7 +463,7 @@ static void evaluateMember(
 // ---------------------------------------------------------------------------
 // Super-member: combine all beneficial mutations onto the base
 // ---------------------------------------------------------------------------
-[[nodiscard]] static Member createSuperMember(
+[[nodiscard]] inline Member createSuperMember(
     const Member&              base,
     const std::vector<Member>& beneficial)
 {

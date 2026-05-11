@@ -208,6 +208,8 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
         src/filters/Filters.cpp
+        src/filters/colorspace.cpp
+        src/filters/dithering.cpp
         src/effects/PaletteCycler.cpp
         src/effects/AnimFxBaker.cpp
         src/operators/FrameOperator.cpp
@@ -235,6 +237,7 @@ else()
         src/main.cpp
         src/PixelPaintView.cpp
         src/export/MeshExporter.cpp
+        src/export/VideoExport.cpp
         src/export/ProjectSerializer.cpp
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
@@ -243,6 +246,8 @@ else()
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
         src/filters/Filters.cpp
+        src/filters/colorspace.cpp
+        src/filters/dithering.cpp
         src/effects/PaletteCycler.cpp
         src/effects/AnimFxBaker.cpp
         src/operators/FrameOperator.cpp
@@ -303,6 +308,11 @@ elseif(PLATFORM_MACOS)
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist"
+        # Ad-hoc signing — no provisioning profile required for local dev builds.
+        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
+        XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED "YES"
+        XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "YES"
+        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""
     )
 elseif(PLATFORM_WEB)
     set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -319,8 +329,11 @@ elseif(PLATFORM_WEB)
         "-sUSE_WEBGL2=1"
         # Filesystem support (needed for /tmp MEMFS read/write in FileChooser)
         "-sFORCE_FILESYSTEM=1"
-        # Export the C callback so JS EM_ASM code can call _file_chooser_on_file_selected
-        "-sEXPORTED_FUNCTIONS=_main,_file_chooser_on_file_selected,_free"
+        # Exported C functions callable from JavaScript via Module._xxx()
+        # video_export_*  — animation frame access for MediaRecorder capture
+        # file_chooser_on_file_selected — file-open/save callback
+        # malloc / free — JS allocates frame buffers with Module._malloc
+        "-sEXPORTED_FUNCTIONS=_main,_file_chooser_on_file_selected,_free,_malloc,_video_export,_video_export_frame_count,_video_export_frame_width,_video_export_frame_height,_video_export_fps,_video_export_get_frame"
         # Runtime helpers used in JS EM_ASM blocks
         "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,UTF8ToString,FS"
         "--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
@@ -351,15 +364,23 @@ if(NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
     add_executable(pelpaint_tests
         tests/test_filters.cpp
         tests/test_save_pipeline.cpp
+        tests/test_export.cpp
         tests/stb_write_impl.cpp
         src/core/ImageSurface.cpp
         src/core/Canvas.cpp
         src/core/AnimationTimeline.cpp
         src/filters/Filters.cpp
+        src/filters/colorspace.cpp
+        src/filters/dithering.cpp
         src/effects/PaletteCycler.cpp
         src/effects/AnimFxBaker.cpp
         src/operators/FrameOperator.cpp
         src/tools/ParticleSystem.cpp
+        src/tools/DrawingAlgorithms.cpp
+        src/tools/PixelPerfectGenerator.cpp
+        src/settings/AppSettings.cpp
+        src/ui/SettingsDialog.cpp
+        src/export/MeshExporter.cpp
     )
 
     target_include_directories(pelpaint_tests PRIVATE
@@ -369,6 +390,7 @@ if(NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
     target_link_libraries(pelpaint_tests PRIVATE
         Catch2::Catch2WithMain
         imgui_lib
+        implot_lib
     )
 
     target_compile_definitions(pelpaint_tests PRIVATE NOMINMAX)

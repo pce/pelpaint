@@ -32,15 +32,52 @@ struct MeshData;
 struct MeshExportOptions {
     MeshMode      mode           = MeshMode::Plane;
     std::uint32_t gridSize       = 1;     ///< cell size in pixels (pixel/block size for PixelMesh)
-    float         depthScale     = 1.0f;
+    float         depthScale     = 1.0f;  ///< Raw Z scale factor passed to mesh builders. Controls world-unit height of extruded geometry.
     bool          useVertexColors = true;
     bool          optimizeMesh   = true;
     /// When true, all vertices use Z=0 (pure flat 2-D mesh). Only Plane mode uses luma-based depth.
     bool          flatZ           = true;
-    /// Constant Z height for solid pixels when flatZ=false and mode != Plane (reserved).
-    float         solidDepth      = 0.5f;
     /// Pixels with alpha below this threshold are treated as fully transparent.
     std::uint8_t  alphaThreshold  = 10;
+
+    /// Depth generation strategy.
+    enum class DepthMode {
+        Luma,       ///< BT.601 brightness → depth (original; bright = near)
+        AlphaDist,  ///< Distance-transform from the transparent boundary
+                    ///< (interior pixels are highest). Best for voxel/cube export.
+    };
+
+    DepthMode depthMode      = DepthMode::Luma;
+
+    /// Max Z height as a fraction of max(canvas_width, canvas_height).
+    /// With default 0.5f a square canvas gets Z in [0, 0.5] while XY are in [0, 1].
+    float maxZFraction       = 0.5f;
+
+    /// Invert the depth map after generation (0→1, 1→0).
+    bool  invertDepth        = false;
+
+    /// If true, pixels whose final depth is below bgThreshold are treated as
+    /// transparent/background and skipped by the mesh builders.
+    bool  removeBackground   = false;
+    float bgThreshold        = 0.12f;  ///< [0,1] depth below this → background
+
+    /// When true the foreground is extruded symmetrically to BOTH sides
+    /// of the canvas plane: Z goes from -maxZFraction/2 to +maxZFraction/2
+    /// instead of the default 0 → maxZFraction.
+    ///
+    /// Example: 10×10 pixel art (black box on white BG), maxZFraction = 1.0
+    ///   - XY normalized to [0, 1]  (10 px → 1 unit)
+    ///   - Z symmetric: [-0.5, +0.5]  (total = 1 unit)
+    ///   → Perfect 1×1×1 cube (10×10×10 in pixel units).
+    bool  symmetricExtrude   = false;
+
+    /// When true the background colour is detected automatically by
+    /// corner-vote (see DetectBackground in ExportUtils.hpp) and any
+    /// rect whose colour matches the background within bgColorTolerance
+    /// is excluded from the mesh — no need to set removeBackground / bgThreshold.
+    bool  autoDetectBackground   = false;
+    /// Per-channel colour distance tolerance for autoDetectBackground.
+    std::uint8_t bgColorTolerance = 15;
 };
 
 class MeshExporter {
@@ -51,8 +88,6 @@ public:
         const pelpaint::ImageView&    view,
         const pelpaint::ColorPalette& palette,
         const MeshExportOptions&      options);
-
-    // ---- Individual builders (public for testing) -----------------------
 
     /// Plane: continuous height-mapped grid surface (terrain-like).
     static bool BuildPlaneMesh(const pelpaint::ImageView& view,

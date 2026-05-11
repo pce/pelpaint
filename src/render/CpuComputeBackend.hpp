@@ -23,9 +23,10 @@ public:
     [[nodiscard]] std::expected<effects::PaletteCycleResult, Error>
     BakePaletteCycleFrames(core::AnimationTimeline&           timeline,
                             const Canvas&                      canvas,
-                            const effects::PaletteCycleConfig& cfg)
+                            const effects::PaletteCycleConfig& cfg,
+                            effects::BakeControl               ctl = {})
     {
-        return effects::GeneratePaletteCycle(timeline, canvas, cfg);
+        return effects::GeneratePaletteCycle(timeline, canvas, cfg, std::move(ctl));
     }
 
     [[nodiscard]] std::expected<std::vector<Pixel>, Error>
@@ -50,7 +51,7 @@ public:
     [[nodiscard]] std::expected<std::vector<Pixel>, Error>
     ApplyGrayscale(std::span<const Pixel> src)
     {
-        return filters::ToGrayscale(src);
+        return filters::to_grayscale(src);
     }
 };
 

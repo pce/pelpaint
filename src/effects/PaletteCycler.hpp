@@ -1,6 +1,8 @@
 #pragma once
 
 #include <expected>
+#include <functional>
+#include <stop_token>
 #include <string>
 #include <vector>
 
@@ -10,6 +12,13 @@
 #include "../ColorPalettes.hpp"
 
 namespace pelpaint::effects {
+
+/// Cancellation and progress for long bakes.
+/// Default-constructed = uncancellable, no progress callback.
+struct BakeControl {
+    std::stop_token               stopToken;            ///< default: never stops
+    std::function<void(int,int)>  onProgress = nullptr; ///< (stepDone, total); nullptr = no-op
+};
 
 struct PaletteCycleConfig {
     /// Ordered list of colors that form the cycle group.
@@ -56,6 +65,7 @@ struct PaletteCycleResult {
 GeneratePaletteCycle(
     pelpaint::core::AnimationTimeline& timeline,
     const pelpaint::Canvas&            canvas,
-    const PaletteCycleConfig&          config);
+    const PaletteCycleConfig&          config,
+    BakeControl                        ctl = {});
 
 } // namespace pelpaint::effects

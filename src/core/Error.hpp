@@ -17,6 +17,7 @@ enum class ErrorCode : std::uint8_t {
     FileIOFailed,        ///< File open / write / read failed
     InvalidImageFormat,  ///< Unsupported channel count or corrupt image data
     InvalidGridSize,     ///< gridSize / blockSize must be > 0
+    Cancelled,           ///< Operation was cancelled via stop_token
 };
 
 /// Lightweight, copyable, non-owning error value — zero heap allocation.
@@ -48,11 +49,13 @@ struct Error {
     [[nodiscard]] static constexpr Error InvalidGridSz() noexcept {
         return {ErrorCode::InvalidGridSize, "Grid size must be > 0"};
     }
+    [[nodiscard]] static constexpr Error Cancelled() noexcept {
+        return {ErrorCode::Cancelled, "Operation cancelled"};
+    }
 };
 
-// ---------------------------------------------------------------------------
+
 // Convenience wrappers for constructing std::expected<T, Error>
-// ---------------------------------------------------------------------------
 
 /// Wrap a T in a value-containing expected<T, Error>.
 template <class T>

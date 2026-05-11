@@ -13,10 +13,12 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <functional>
 #include <mdspan>
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <stop_token>
 
 #include "../filters/Filters.hpp"
 
@@ -302,7 +304,8 @@ std::expected<effects::PaletteCycleResult, Error>
 MetalComputeBackend::BakePaletteCycleFrames(
     core::AnimationTimeline&           timeline,
     const Canvas&                      canvas,
-    const effects::PaletteCycleConfig& cfg)
+    const effects::PaletteCycleConfig& cfg,
+    effects::BakeControl               ctl)
 {
     if (!impl_->ok)
         return std::unexpected(Error{ErrorCode::NullLayer, "Metal backend unavailable"});
@@ -354,7 +357,7 @@ MetalComputeBackend::BakePaletteCycleFrames(
     }
 
     auto cyclePxResult = cfg.quantizeFirst
-        ? filters::QuantiseToPalette(
+        ? filters::quantise_to_palette(
               cycleLayer.pixelData,
               std::span<const pelpaint::Pixel>{cfg.cycleColors})
           .transform([](std::vector<pelpaint::Pixel> px) { return std::move(px); })
@@ -381,6 +384,9 @@ MetalComputeBackend::BakePaletteCycleFrames(
     result.frameIndices.reserve(static_cast<std::size_t>(N));
 
     for (int step = 0; step < N; ++step) {
+        if (ctl.stopToken.stop_requested())
+            return std::unexpected(Error::Cancelled());
+
         std::ranges::copy(cyclePx, scratchBuf.span().begin());
 
         id<MTLCommandBuffer> cmd = [impl_->queue commandBuffer];
@@ -409,9 +415,9 @@ MetalComputeBackend::BakePaletteCycleFrames(
         frame.label = "Cycle " + std::to_string(step) + "/" + std::to_string(N - 1);
         if (cfg.frameDelay > 0.f) frame.delay = cfg.frameDelay;
 
-        const std::span<const core::PixelRGBA8> flatSpan{
-            reinterpret_cast<const core::PixelRGBA8*>(frameBuf.host), nPx};
-        frame.surface.WriteFlat(flatSpan);
+        frame.surface.WriteFlat(core::ImageSurface::PixelMdspan2d{
+            reinterpret_cast<const core::PixelRGBA8*>(frameBuf.host),
+            static_cast<std::size_t>(H), static_cast<std::size_t>(W)});
 
         frame.layerStates.reserve(layers.size());
         for (int li : sortedIdx)
@@ -425,6 +431,7 @@ MetalComputeBackend::BakePaletteCycleFrames(
                     : layers[static_cast<std::size_t>(li)].opacity});
 
         result.frameIndices.push_back(frameIdx);
+        if (ctl.onProgress) ctl.onProgress(step + 1, N);
     }
 
     return result;

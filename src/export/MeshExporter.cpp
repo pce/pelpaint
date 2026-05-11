@@ -3,6 +3,7 @@
 #include "ExportUtils.hpp"
 
 #include <cmath>
+#include <optional>
 #include <set>
 
 namespace pelpaint::exporter {
@@ -28,9 +29,6 @@ namespace pelpaint::exporter {
         bool wireframe = false;  // true → indices are edge pairs; false → face triples
     };
 
-    // ================================================================
-    // SaveAsMesh — dispatch + PLY serialisation
-    // ================================================================
 
     bool MeshExporter::SaveAsMesh(const std::string&            filename,
                                   const pelpaint::ImageView&    view,
@@ -49,22 +47,84 @@ namespace pelpaint::exporter {
         MeshExportOptions opts = options;
         if (opts.mode == MeshMode::Plane) opts.flatZ = false;
 
+        // Depth map post-processing
+        // AlphaDist: replace luma-based depth with a distance transform
+        // from the transparent boundary (BFS from alpha=0 pixels).
+        if (opts.depthMode == MeshExportOptions::DepthMode::AlphaDist) {
+            const std::size_t sW = SampleWidth(view.width,  opts.gridSize);
+            const std::size_t sH = SampleHeight(view.height, opts.gridSize);
+            std::vector<float> dist(sW * sH, 0.0f);
+            std::vector<int>   q;
+            q.reserve(sW * sH);
+            // Seed: transparent sample cells → distance 0
+            for (std::size_t sy = 0; sy < sH; ++sy) {
+                for (std::size_t sx = 0; sx < sW; ++sx) {
+                    const std::uint32_t px = ClampU32(static_cast<std::uint32_t>(sx * opts.gridSize + opts.gridSize / 2u), 0u, view.width - 1u);
+                    const std::uint32_t py = ClampU32(static_cast<std::uint32_t>(sy * opts.gridSize + opts.gridSize / 2u), 0u, view.height - 1u);
+                    std::uint8_t r = 0, g = 0, b = 0, a = 255;
+                    ReadPixelRGBA8(view, px, py, r, g, b, a);
+                    if (a < opts.alphaThreshold) {
+                        const std::size_t idx = sy * sW + sx;
+                        dist[idx] = 0.0f;
+                        q.push_back(static_cast<int>(idx));
+                    } else {
+                        dist[sy * sW + sx] = -1.0f; // unvisited
+                    }
+                }
+            }
+            // BFS
+            for (int qi = 0; qi < static_cast<int>(q.size()); ++qi) {
+                const std::size_t idx = static_cast<std::size_t>(q[qi]);
+                const std::size_t sx  = idx % sW;
+                const std::size_t sy  = idx / sW;
+                const float d = dist[idx];
+                const int nb[4][2] = {{-1,0},{1,0},{0,-1},{0,1}};
+                for (auto& n : nb) {
+                    const int nx = static_cast<int>(sx) + n[0];
+                    const int ny = static_cast<int>(sy) + n[1];
+                    if (nx < 0 || nx >= static_cast<int>(sW) || ny < 0 || ny >= static_cast<int>(sH)) continue;
+                    const std::size_t ni = static_cast<std::size_t>(ny) * sW + static_cast<std::size_t>(nx);
+                    if (dist[ni] < 0.0f) {
+                        dist[ni] = d + 1.0f;
+                        q.push_back(static_cast<int>(ni));
+                    }
+                }
+            }
+            // Normalise and overwrite depthMap
+            float maxD = 1.0f;
+            for (float v : dist) if (v > maxD) maxD = v;
+            for (std::size_t i = 0; i < depthMap.size(); ++i)
+                depthMap[i] = (dist[i] < 0.0f) ? 0.0f : (dist[i] / maxD);
+        }
+
+        // Invert
+        if (opts.invertDepth) {
+            for (auto& d : depthMap) d = 1.0f - d;
+        }
+
+        // Background removal: zero out any cell below threshold so builders skip it
+        if (opts.removeBackground) {
+            for (auto& d : depthMap) {
+                if (d < opts.bgThreshold) d = 0.0f;
+            }
+        }
+
         MeshData mesh;
         switch (opts.mode) {
             case MeshMode::Plane:
-                if (!BuildPlaneMesh(view, depthMap, opts.gridSize, opts.depthScale, mesh))
+                if (!BuildPlaneMesh(view, depthMap, opts.gridSize, opts.maxZFraction, mesh))
                     return false;
                 break;
             case MeshMode::Wireframe:
-                if (!BuildWireframeMesh(view, depthMap, opts.gridSize, opts.depthScale, opts, mesh))
+                if (!BuildWireframeMesh(view, depthMap, opts.gridSize, opts.maxZFraction, opts, mesh))
                     return false;
                 break;
             case MeshMode::LoPoly:
-                if (!BuildLoPolyMesh(view, depthMap, opts.gridSize, opts.depthScale, opts, mesh))
+                if (!BuildLoPolyMesh(view, depthMap, opts.gridSize, opts.maxZFraction, opts, mesh))
                     return false;
                 break;
             case MeshMode::PixelMesh:
-                if (!BuildPixelMesh(view, depthMap, opts.gridSize, opts.depthScale, opts, mesh))
+                if (!BuildPixelMesh(view, depthMap, opts.gridSize, opts.maxZFraction, opts, mesh))
                     return false;
                 break;
         }
@@ -130,9 +190,6 @@ namespace pelpaint::exporter {
         return file.good();
     }
 
-    // ================================================================
-    // BuildMergedRects — greedy rectangle expansion + avgDepth
-    // ================================================================
 
     static bool BuildMergedRects(std::span<const PixelCell> cells,
                                  std::uint32_t              sampleW,
@@ -208,9 +265,6 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    // ================================================================
-    // BuildPlaneMesh — continuous height-mapped terrain grid
-    // ================================================================
 
     bool MeshExporter::BuildPlaneMesh(const pelpaint::ImageView& view,
                                       std::span<const float>     depthMap,
@@ -230,6 +284,8 @@ namespace pelpaint::exporter {
 
         if (depthMap.size() != sampleW * sampleH) return false;
         if (sampleW < 2 || sampleH < 2) return false;
+
+        const float invMaxDim = 1.0f / static_cast<float>(std::max(view.width, view.height));
 
         try {
             outMesh.vertices.resize(sampleW * sampleH);
@@ -255,8 +311,8 @@ namespace pelpaint::exporter {
                 const float z = depthMap[idx] * depthScale;
 
                 MeshVertex vtx{};
-                vtx.x = static_cast<float>(pxX);
-                vtx.y = static_cast<float>(pxY);
+                vtx.x = static_cast<float>(pxX) * invMaxDim;
+                vtx.y = static_cast<float>(pxY) * invMaxDim;
                 vtx.z = z;
                 vtx.u = u;
                 vtx.v = v;
@@ -326,9 +382,7 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    // ================================================================
-    // PushVertex — append a vertex and return its index
-    // ================================================================
+
 
     static std::uint32_t PushVertex(MeshData&    mesh,
                                     float x, float y, float z,
@@ -344,9 +398,6 @@ namespace pelpaint::exporter {
         return static_cast<std::uint32_t>(mesh.vertices.size() - 1u);
     }
 
-    // ================================================================
-    // EmitFlatTri — flat-shaded triangle (non-shared vertices)
-    // ================================================================
 
     static void EmitFlatTri(MeshData& mesh,
                             float ax, float ay, float az,
@@ -373,11 +424,6 @@ namespace pelpaint::exporter {
         mesh.indices.push_back(i2);
     }
 
-    // ================================================================
-    // GridVertex / BuildLoPolyGrid / TriVariance
-    //   Shared helpers for LoPoly and Wireframe.
-    // ================================================================
-
     struct GridVertex {
         float        x = 0.0f, y = 0.0f, z = 0.0f;
         std::uint8_t r = 255,  g = 255,  b = 255,  a = 255;
@@ -402,6 +448,8 @@ namespace pelpaint::exporter {
         if (depthMap.size() != sampleW * sampleH) return false;
         if (sampleW < 2 || sampleH < 2) return false;
 
+        const float invMaxDim = 1.0f / static_cast<float>(std::max(view.width, view.height));
+
         outSampleW = sampleW;
         outSampleH = sampleH;
 
@@ -424,8 +472,8 @@ namespace pelpaint::exporter {
                 if (!ReadPixelRGBA8(view, pxX, pxY, r, g, b, a)) return false;
 
                 outGrid[idx] = GridVertex{
-                    static_cast<float>(pxX),
-                    static_cast<float>(pxY),
+                    static_cast<float>(pxX) * invMaxDim,
+                    static_cast<float>(pxY) * invMaxDim,
                     // Transparent pixels keep Z=0 so they don't distort nearby geometry.
                     (a >= alphaThreshold) ? depthMap[idx] * depthScale : 0.0f,
                     r, g, b, a
@@ -448,11 +496,6 @@ namespace pelpaint::exporter {
              + sq(q.r - mr) + sq(q.g - mg) + sq(q.b - mb)
              + sq(r.r - mr) + sq(r.g - mg) + sq(r.b - mb);
     }
-
-    // ================================================================
-    // BuildLoPolyMesh — adaptive-diagonal flat-shaded triangulation
-    // ================================================================
-
     bool MeshExporter::BuildLoPolyMesh(const pelpaint::ImageView& view,
                                        std::span<const float>     depthMap,
                                        std::uint32_t              gridSize,
@@ -535,11 +578,6 @@ namespace pelpaint::exporter {
 
         return true;
     }
-
-    // ================================================================
-    // BuildWireframeMesh — edge skeleton of the LoPoly triangulation
-    // ================================================================
-
     bool MeshExporter::BuildWireframeMesh(const pelpaint::ImageView& view,
                                           std::span<const float>     depthMap,
                                           std::uint32_t              gridSize,
@@ -645,9 +683,6 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    // ================================================================
-    // BuildPixelCells — one PixelCell per grid cell (centre sample)
-    // ================================================================
 
     static bool BuildPixelCells(const pelpaint::ImageView& view,
                                 std::span<const float>     depthMap,
@@ -699,9 +734,6 @@ namespace pelpaint::exporter {
         return true;
     }
 
-    // ================================================================
-    // PushQuad / EmitPrism — cuboid face helpers for PixelMesh
-    // ================================================================
 
     static void PushQuad(MeshData&     mesh,
                          std::uint32_t i0, std::uint32_t i1,
@@ -742,10 +774,6 @@ namespace pelpaint::exporter {
         PushQuad(mesh, b3, b0, t0, t3);          // left
     }
 
-    // ================================================================
-    // BuildPixelMesh — greedy colour-block cuboids (depth-averaged)
-    // ================================================================
-
     bool MeshExporter::BuildPixelMesh(const pelpaint::ImageView& view,
                                       std::span<const float>     depthMap,
                                       std::uint32_t              gridSize,
@@ -784,16 +812,40 @@ namespace pelpaint::exporter {
             return false;
         }
 
-        for (const auto& rect : rects) {
-            const float x0 = static_cast<float>(rect.x * gridSize);
-            const float y0 = static_cast<float>(rect.y * gridSize);
-            const float x1 = static_cast<float>((rect.x + rect.w) * gridSize);
-            const float y1 = static_cast<float>((rect.y + rect.h) * gridSize);
+        const float invMaxDim = 1.0f / static_cast<float>(std::max(view.width, view.height));
 
-            const float z0 = 0.0f;
-            // flatZ=true: all prisms share the same uniform height (depthScale).
-            // flatZ=false: height is proportional to the average pixel luma in the rect.
-            const float z1 = options.flatZ ? depthScale : rect.avgDepth * depthScale;
+        // Optional: auto-detect background colour by corner vote
+        std::optional<pelpaint::Pixel> bgColor;
+        if (options.autoDetectBackground)
+            bgColor = DetectBackground(view);
+
+        for (const auto& rect : rects) {
+            // Optional: skip rects whose colour matches the background
+            if (bgColor.has_value()) {
+                const pelpaint::Pixel px{ rect.cell.r, rect.cell.g, rect.cell.b, rect.cell.a };
+                if (IsBackground(px, *bgColor, options.bgColorTolerance))
+                    continue;
+            }
+
+            const float x0 = static_cast<float>(rect.x * gridSize)             * invMaxDim;
+            const float y0 = static_cast<float>(rect.y * gridSize)             * invMaxDim;
+            const float x1 = static_cast<float>((rect.x + rect.w) * gridSize) * invMaxDim;
+            const float y1 = static_cast<float>((rect.y + rect.h) * gridSize) * invMaxDim;
+
+            // Z extents
+            // flatZ=true  : uniform height from 0 up to depthScale
+            // flatZ=false : height proportional to average pixel luma
+            // symmetricExtrude: center on the canvas plane (z in [-half, +half])
+            const float rawZ = options.flatZ ? depthScale : rect.avgDepth * depthScale;
+            float z0, z1;
+            if (options.symmetricExtrude) {
+                const float half = rawZ * 0.5f;
+                z0 = -half;
+                z1 = +half;
+            } else {
+                z0 = 0.0f;
+                z1 = rawZ;
+            }
 
             EmitPrism(outMesh,
                       x0, y0, x1, y1, z0, z1,

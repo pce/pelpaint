@@ -20,7 +20,25 @@ struct FrameLayerState {
     float opacity    = 1.0f;  ///< Layer opacity override (0..1)
 };
 
-// ---------------------------------------------------------------------------
+
+/// @brief Wave shape for a frame's chip-tune audio trigger.
+/// Mirrors DSP oscillator shapes without introducing an audio header dependency in core.
+enum class ChipWave { Saw, Square, Triangle, Noise };
+
+/// @brief Optional audio trigger attached to one animation frame.
+///
+/// When set, the export pipeline triggers a note at the start of this frame's
+/// audio block. Ignored during normal rendering; used only by AnimExportPackage.
+struct FrameAudioEvent {
+    bool     active     = false;    ///< true = a note fires when this frame begins
+    int      midiNote   = 60;       ///< MIDI note number (C4 = 60, range 0..127)
+    float    velocity   = 0.75f;    ///< 0..1; boosted by accent
+    bool     accent     = false;    ///< sharper attack + VCF cutoff boost
+    bool     glide      = false;    ///< portamento from previous active frame's note
+    ChipWave wave       = ChipWave::Square;
+    float    pulseWidth = 0.5f;     ///< for Square wave only (0.05..0.95)
+};
+
 // AnimationFrame
 //
 // A single frame in an animation sequence.
@@ -49,11 +67,12 @@ struct AnimationFrame {
     operators::DrawMode                mode          = operators::DrawMode::PixelPerfect;
     operators::FramePipeline           pipeline;             ///< ops applied to sourceFrame
     bool                               pipelineDirty = false;///< true -> BakeFrame() needed
+
+    /// Optional audio trigger for this frame (used by AnimExportPackage).
+    FrameAudioEvent audioEvent;
 };
 
-// ---------------------------------------------------------------------------
-// AnimationPreset — common FPS values with descriptive names.
-// ---------------------------------------------------------------------------
+
 enum class AnimationPreset : int {
     Custom         = 0,
     Slideshow_1fps,

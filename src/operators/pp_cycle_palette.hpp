@@ -42,7 +42,7 @@ namespace pelpaint::operators {
             int   best     = -1;
             float bestDist = matchThreshold + 0.001f;
             for (int i = 0; i < n; ++i) {
-                const float d = filters::ColorDistance(px, cyc[i]);
+                const float d = filters::color_distance(px, cyc[i]);
                 if (d < bestDist) { bestDist = d; best = i; }
             }
             if (best >= 0)

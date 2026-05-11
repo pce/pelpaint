@@ -1,106 +1,81 @@
 #pragma once
 
-#include <expected>
+/** @file @brief Umbrella filter header — includes colorspace and dithering, declares pixel-art and convolution filters. */
+
 #include <span>
 #include <vector>
 #include <cstdint>
 
-#include "../core/Types.hpp"
-#include "../core/Error.hpp"
+#include "colorspace.hpp"  // FilterResult, color_distance, find_nearest, to_grayscale
+#include "dithering.hpp"   // floyd_steinberg, atkinson, stucki, ordered_dithering
 
 namespace pelpaint::filters {
 
-// ---------------------------------------------------------------------------
-// Result type
-// ---------------------------------------------------------------------------
-
-/// Success = new pixel buffer (std::vector<Pixel>).
-/// Failure = pelpaint::Error (code + message, no heap allocation).
-using FilterResult = std::expected<std::vector<Pixel>, Error>;
-
-// ---------------------------------------------------------------------------
-// Colour-space transforms
-// ---------------------------------------------------------------------------
-
-/// Convert every pixel to grayscale (BT.601 luma, alpha preserved).
-[[nodiscard]] FilterResult ToGrayscale(std::span<const Pixel> src);
-
-// ---------------------------------------------------------------------------
-// Error-diffusion dithering
-// ---------------------------------------------------------------------------
-
-/// Floyd-Steinberg dithering (classic 7/3/5/1 kernel).
-/// @param palette       Target palette — must not be empty.
-/// @param preserveAlpha Copy source alpha verbatim into the output.
-[[nodiscard]] FilterResult FloydSteinberg(
-    std::span<const Pixel> src,
-    int                    w,
-    int                    h,
-    std::span<const Pixel> palette,
-    bool                   preserveAlpha = false);
-
-/// Atkinson dithering (1/8-weight kernel, distributes 6/8 of the error).
-[[nodiscard]] FilterResult Atkinson(
-    std::span<const Pixel> src,
-    int                    w,
-    int                    h,
-    std::span<const Pixel> palette,
-    bool                   preserveAlpha = false);
-
-/// Stucki dithering (wide-kernel, denominator 42).
-[[nodiscard]] FilterResult Stucki(
-    std::span<const Pixel> src,
-    int                    w,
-    int                    h,
-    std::span<const Pixel> palette,
-    bool                   preserveAlpha = false);
-
-/// Bayer 4x4 ordered (threshold-matrix) dithering.
-[[nodiscard]] FilterResult OrderedDithering(
-    std::span<const Pixel> src,
-    int                    w,
-    int                    h,
-    std::span<const Pixel> palette,
-    bool                   preserveAlpha = false);
-
-// ---------------------------------------------------------------------------
-// Palette quantisation
-// ---------------------------------------------------------------------------
-
 /// Snap every pixel to the nearest colour in the palette.
-[[nodiscard]] FilterResult QuantiseToPalette(
+[[nodiscard]] FilterResult quantise_to_palette(
     std::span<const Pixel> src,
     std::span<const Pixel> palette);
 
-// ---------------------------------------------------------------------------
-// Pixel-art effects
-// ---------------------------------------------------------------------------
-
-/// Pixelate: average blockSize x blockSize blocks, optionally snap to palette.
+/// Pixelate: average blockSize×blockSize blocks, optionally snap to palette.
 /// Pass an empty @p palette span to skip palette quantisation.
-[[nodiscard]] FilterResult Pixelify(
+[[nodiscard]] FilterResult pixelify(
     std::span<const Pixel> src,
     int                    w,
     int                    h,
     int                    blockSize,
     std::span<const Pixel> palette = {});
 
-// ---------------------------------------------------------------------------
-// Colour metric helpers  (pure, exposed for callers that need them)
-// ---------------------------------------------------------------------------
+/// Box blur (radius=1 → 3×3). gaussian=true applies three box-blur passes
+/// (Langer's approximation of a Gaussian at the same radius).
+[[nodiscard]] FilterResult blur(
+    std::span<const Pixel> src,
+    int                    w,
+    int                    h,
+    int                    radius,
+    bool                   gaussian = false);
 
-/// Euclidean RGBA distance in [0, ~441].
-[[nodiscard]] float ColorDistance(const Pixel& a, const Pixel& b) noexcept;
+/// 3×3 unsharp-mask sharpen.
+/// strength ∈ [0, 2]: 0 = identity, 1 = standard sharpen, 2 = over-sharpen.
+[[nodiscard]] FilterResult sharpen(
+    std::span<const Pixel> src,
+    int                    w,
+    int                    h,
+    float                  strength = 1.0f);
 
-/// Nearest-neighbour palette lookup.
-/// Returns @p src unchanged when @p palette is empty.
-[[nodiscard]] Pixel FindNearest(
-    const Pixel&           src,
-    std::span<const Pixel> palette) noexcept;
+enum class EdgeDetectMode { Sobel, Laplacian };
 
-// ---------------------------------------------------------------------------
-// Triangulate (Triangula-style genetic algorithm triangulation)
-// ---------------------------------------------------------------------------
+/// Luminance-based Sobel or Laplacian edge detection.
+/// Output: bright edges on black (or inverted). Alpha is preserved.
+/// Pixels whose edge magnitude is below `threshold` are set to black.
+[[nodiscard]] FilterResult edge_detect(
+    std::span<const Pixel> src,
+    int                    w,
+    int                    h,
+    EdgeDetectMode         mode         = EdgeDetectMode::Sobel,
+    float                  threshold    = 30.f,
+    bool                   invert_output = false);
+
+enum class OutlineMode { Outline, Rim };
+enum class OutlineEdge { PixelPerfect, Opacity };
+
+struct OutlineConfig {
+    OutlineMode  mode           = OutlineMode::Outline;
+    OutlineEdge  edge_mode      = OutlineEdge::PixelPerfect;
+    int          pen_size       = 2;           ///< ring thickness in pixels [1, 32]
+    Pixel        color          = {0,0,0,255};
+    bool         auto_lighten   = false;       ///< override color with lightened version
+    float        lighten_factor = 0.4f;        ///< [0,1] — 0=identity, 1=white
+    uint8_t      alpha_threshold = 10;         ///< min alpha to treat pixel as opaque
+};
+
+/// Compute a ring outline or rim around opaque pixels.
+/// Returns a pixel buffer (same W×H as src), fully transparent except the ring.
+/// Caller adds it as a new canvas layer and calls WriteFlat.
+[[nodiscard]] FilterResult outline_layer(
+    std::span<const Pixel> src,
+    int                    w,
+    int                    h,
+    const OutlineConfig&   cfg);
 
 struct TriangulateOptions {
     int     numPoints      = 300;   ///< Number of Delaunay control points
@@ -118,7 +93,7 @@ struct TriangulateOptions {
 /// non-overlapping Delaunay triangles flat-shaded with the average colour
 /// of all source pixels inside each triangle.
 /// Transparent pixels (alpha < alphaThreshold) are preserved unchanged.
-[[nodiscard]] FilterResult Triangulate(
+[[nodiscard]] FilterResult triangulate(
     std::span<const Pixel>    src,
     int                       w,
     int                       h,

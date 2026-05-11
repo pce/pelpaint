@@ -54,9 +54,9 @@ void AlphaOverAccum(std::vector<Pixel>& dst,
 std::expected<PaletteCycleResult, pelpaint::Error>
 GeneratePaletteCycle(AnimationTimeline&        timeline,
                      const Canvas&             canvas,
-                     const PaletteCycleConfig& cfg)
+                     const PaletteCycleConfig& cfg,
+                     BakeControl               ctl)
 {
-    // ---- Validate inputs ---------------------------------------------------
 
     const std::vector<Layer>& layers = canvas.Layers();
 
@@ -106,7 +106,7 @@ GeneratePaletteCycle(AnimationTimeline&        timeline,
 
     std::vector<Pixel> cycleBase;
     if (cfg.quantizeFirst) {
-        auto res = filters::QuantiseToPalette(
+        auto res = filters::quantise_to_palette(
             cycleLayer.pixelData,
             std::span<const Pixel>{cfg.cycleColors});
         if (!res) return std::unexpected(res.error());
@@ -126,6 +126,9 @@ GeneratePaletteCycle(AnimationTimeline&        timeline,
         W, H, pelpaint::operators::DrawMode::PixelPerfect};
 
     for (int i = 0; i < N; ++i) {
+        if (ctl.stopToken.stop_requested())
+            return std::unexpected(pelpaint::Error::Cancelled());
+
         // a. Apply palette rotation to the cycling layer.
         std::vector<Pixel> cycledPx;
         if (i == 0) {
@@ -164,6 +167,7 @@ GeneratePaletteCycle(AnimationTimeline&        timeline,
                                            : layers[static_cast<std::size_t>(li)].opacity});
 
         result.frameIndices.push_back(frameIdx);
+        if (ctl.onProgress) ctl.onProgress(i + 1, N);
     }
 
     return result;

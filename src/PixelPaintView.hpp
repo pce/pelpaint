@@ -47,6 +47,10 @@
 #include "tools/PixelPerfectGenerator.hpp"
 #include "tools/ParticleSystem.hpp"
 
+#include "audio/AudioEngine.hpp"
+#include "export/AnimExportPackage.hpp"
+#include "export/FrameSequenceExporter.hpp"
+
 namespace pelpaint {
 
 namespace fs = std::filesystem;
@@ -84,6 +88,27 @@ public:
     // Both are stored into brushSettings.tiltX / tiltY for use by
     // BrushMode::Pen (calligraphic nib orientation).
     void SetPenTilt(float x, float y) noexcept;
+
+#ifdef __EMSCRIPTEN__
+    // ---- WASM video-export bindings ---------------------------------
+    // Called by the extern "C" functions in VideoExport.cpp so they can
+    // reach private timeline_ / canvasWidth without friendship tricks.
+
+    /// Total frames in the animation timeline.
+    [[nodiscard]] int   VideoGetFrameCount() const noexcept;
+
+    /// Canvas pixel dimensions.
+    [[nodiscard]] int   VideoGetWidth()  const noexcept { return canvasWidth;  }
+    [[nodiscard]] int   VideoGetHeight() const noexcept { return canvasHeight; }
+
+    /// Animation FPS.
+    [[nodiscard]] float VideoGetFps() const noexcept;
+
+    /// Copy RGBA8 data for one animation frame into `outRGBA`.
+    /// `outRGBA` must be at least w*h*4 bytes (JS pre-allocates with Module._malloc).
+    /// Returns true on success.
+    [[nodiscard]] bool  VideoGetFrameRGBA(int frameIdx, std::uint8_t* outRGBA, int bufLen) const;
+#endif // __EMSCRIPTEN__
 
 private:
     // source of truth for pixel data
@@ -272,6 +297,26 @@ private:
     int meshExportMode     = 0;
     bool meshFlatZ         = true;   ///< Flat 2-D mesh (Z=0) for LoPoly/Wireframe/PixelMesh
 
+    // ---- Mesh export advanced settings ----------------------------------
+    float meshDepthMaxZ       = 50.0f;  ///< max Z height as % of max(W,H); 50 = half-width
+    bool  meshInvertDepth     = false;
+    bool  meshRemoveBg        = false;
+    float meshBgThreshold     = 12.0f;  ///< 0-100 scale (divided by 100 when passed)
+    int   meshDepthMode       = 0;      ///< 0=Luma, 1=AlphaDist
+
+    // ---- SVG export settings --------------------------------------------
+    int   svgScale            = 4;      ///< upscale factor (1 px -> N SVG units)
+    bool  svgEmbedBackground  = false;
+
+    // ---- Audio engine + export UI state ---------------------------------
+    /// Audio engine — initialized in constructor, used for live preview + WAV export
+    pelpaint::audio::AudioEngine audio_;
+
+    int  audioPresetIndex_   = 2;   // default: C64Bass (index 2)
+    int  audioBpm_           = 120;
+    bool audioPlaying_       = false;
+    std::string lastExportPackageDir_;  // shown in UI after successful export
+
     // ====================================================================
     // ShapeRedraw brush
     // ====================================================================
@@ -288,6 +333,26 @@ private:
     bool                  shapeRedrawFilterUsePalette = false;
 
     std::array<bool, 64>  shapeRedrawCustomMap = {};
+
+    // ---- Filter: convolution kernels ----------------------------------------
+    int   blurRadius          = 2;
+    bool  blurGaussian        = false;
+    float sharpenStrength     = 0.8f;
+    int   edgeDetectMode      = 0;   // 0=Sobel 1=Laplacian
+    float edgeDetectThresh    = 30.f;
+    bool  edgeDetectInvert    = false;
+
+    // ---- Filter: outline layer -----------------------------------------------
+    int   outlinePenSize      = 2;
+    int   outlineMode         = 0;   // 0=Outline 1=Rim
+    int   outlineEdgeMode     = 0;   // 0=PixelPerfect 1=Opacity
+    Pixel outlineColor        = {0, 0, 0, 255};
+    bool  outlineAutoLighten  = false;
+    float outlineLightenFactor= 0.4f;
+    int   outlineLayerIdx     = -1;  // -1 = no live preview layer
+
+    // ---- Filter panel accordion state ----------------------------------------
+    int   m_filterOpenSection = 0;   // index of the currently expanded section
 
     // ---- Selection / canvas FAB state ------------------------------------
     struct FabState {
@@ -374,6 +439,8 @@ private:
     // ====================================================================
 
     SelectionData currentSelection;
+    SelectMode currentSelectMode = SelectMode::Rectangle;
+    float      selectApproxThreshold = 10.0f;  ///< alpha threshold for Fit-to-Content
 
     bool   IsRectSelectionActive() const;
     bool   IsPointInSelection(int x, int y) const;
@@ -389,6 +456,9 @@ private:
     void   FinalizePolygonSelection();
     bool   IsPointInPolygon(const Point2f& point, const std::vector<Point2f>& polygon) const;
     void   CopyPolygonSelection();
+
+    bool IsSelectionToolActive() const noexcept;
+    void ApproximateSelectionToOutline();
 
     // ====================================================================
     // Dithering state
@@ -478,12 +548,20 @@ private:
     bool SaveToSVGVector(const std::string& filename);
     bool SaveDepthMap(const std::string& filename);
     void GenerateDepthMapLayer();
+    bool SaveSVG(const std::string& filename);
     bool SaveMesh(const std::string& filename);
     bool LoadFromImage(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
     bool SaveProject(const std::string& filename);
     bool LoadProject(const std::string& filename);
+
+    /// Render the current sequencer state to a WAV file.
+    bool ExportAudioWav(const std::string& path);
+
+    /// Export frames + audio into a self-contained timestamped subfolder.
+    exporter::AnimExportResult ExportAnimPackage(const std::string& rootDir,
+                                                  const std::string& stem);
 
     // ====================================================================
     // Filters / effects
@@ -499,6 +577,10 @@ private:
     void ApplyPixelify(int pixelSize, bool usePalette = true);
     void ApplyShapeRedrawFilter();
     void ApplyTriangulate();
+    void ApplyBlur();
+    void ApplySharpen();
+    void ApplyEdgeDetect();
+    void ApplyOutlineLayer();
 
     // Helpers used by dithering algorithms
     Pixel  FindNearestPaletteColor(const Pixel& color, const std::vector<Pixel>& palette) const;

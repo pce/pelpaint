@@ -30,7 +30,8 @@ public:
     [[nodiscard]] std::expected<effects::PaletteCycleResult, Error>
     BakePaletteCycleFrames(core::AnimationTimeline&           timeline,
                             const Canvas&                      canvas,
-                            const effects::PaletteCycleConfig& cfg);
+                            const effects::PaletteCycleConfig& cfg,
+                            effects::BakeControl               ctl = {});
 
     [[nodiscard]] std::expected<std::vector<Pixel>, Error>
     ApplyCyclePalette(std::span<const Pixel> src,

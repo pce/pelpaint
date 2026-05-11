@@ -2,6 +2,7 @@
 #include "export/ImageExporter.hpp"
 #include "export/ProjectSerializer.hpp"
 #include "export/MeshExporter.hpp"
+#include "export/SvgExporter.hpp"
 #include "effects/PaletteCycler.hpp"
 #include "render/ComputeBackend.hpp"
 #include "render/CpuComputeBackend.hpp"
@@ -9,6 +10,9 @@
 #include "ui/FabBar.hpp"
 #include "tools/DrawingAlgorithms.hpp"
 #include "filters/Filters.hpp"
+#ifdef __EMSCRIPTEN__
+#  include "export/VideoExport.hpp"
+#endif
 #include <iostream>
 #include <fstream>
 #include <cmath>
@@ -53,6 +57,7 @@ namespace pelpaint {
 
 using pelpaint::exporter::ImageExporter;
 using pelpaint::exporter::MeshExporter;
+using pelpaint::exporter::SvgExporter;
 using pelpaint::exporter::MeshExportOptions;
 using pelpaint::exporter::MeshMode;
 
@@ -115,12 +120,71 @@ PixelPaintView::PixelPaintView()
 
     // CPU compute backend is always available; replaced by GPU in SetMetalDevice.
     computeBackend_ = render::Backend{std::make_unique<render::CpuComputeBackend>()};
+
+#ifdef __EMSCRIPTEN__
+    // Register this instance so the extern "C" video-export functions can
+    // reach the timeline without a friendship or global-state hack.
+    pelpaint::g_VideoExportView = this;
+#endif
+
+    // Initialize audio engine with default C64 bass preset.
+    audio_.init();
+    audio_.applyChipPreset(pelpaint::audio::AudioEngine::ChipPreset::C64Bass);
+    audio_.sequencer.bpm       = 120.f;
+    audio_.sequencer.stepCount = 16;
+    // Default bass pattern: beats 1, 3, 5, 7 (indices 0,4,8,12 in 16th notes)
+    for (int i : {0, 4, 8, 12}) {
+        audio_.sequencer.steps[static_cast<std::size_t>(i)].active    = true;
+        audio_.sequencer.steps[static_cast<std::size_t>(i)].waveShape = 2; // Triangle
+    }
+    audio_.sequencer.steps[0].pitch  = 0;
+    audio_.sequencer.steps[4].pitch  = 7;   // fifth
+    audio_.sequencer.steps[8].pitch  = 0;
+    audio_.sequencer.steps[12].pitch = 5;  // fourth
 }
 
 PixelPaintView::~PixelPaintView()
 {
+    audio_.stopAudio();
     DestroyTexture();
+#ifdef __EMSCRIPTEN__
+    // Clear the global pointer so stale callbacks can't fire after destruction.
+    if (pelpaint::g_VideoExportView == this)
+        pelpaint::g_VideoExportView = nullptr;
+#endif
 }
+
+// ---- WASM video-export accessor implementations -------------------------
+#ifdef __EMSCRIPTEN__
+
+int PixelPaintView::VideoGetFrameCount() const noexcept
+{
+    return timeline_.FrameCount();
+}
+
+float PixelPaintView::VideoGetFps() const noexcept
+{
+    return timeline_.FPS();
+}
+
+bool PixelPaintView::VideoGetFrameRGBA(int frameIdx, std::uint8_t* outRGBA, int bufLen) const
+{
+    if (frameIdx < 0 || frameIdx >= timeline_.FrameCount()) return false;
+    if (!outRGBA || bufLen < 4) return false;
+
+    const auto& aframe = timeline_.Frame(frameIdx);
+    // Flatten tiles into a contiguous scratch buffer owned by the surface.
+    const core::ImageView view = aframe.surface.Flatten();
+    if (!view.valid()) return false;
+
+    const int needed = static_cast<int>(view.width) * static_cast<int>(view.height) * 4;
+    if (bufLen < needed) return false;
+
+    std::memcpy(outRGBA, view.data, static_cast<std::size_t>(needed));
+    return true;
+}
+
+#endif // __EMSCRIPTEN__
 
 
 void PixelPaintView::InitializeLayers()
@@ -532,7 +596,7 @@ void PixelPaintView::ApplyPalette(const std::vector<pelpaint::Pixel>& palette)
     Layer* l = GetActiveLayer();
     if (!l) return;
 
-    filters::QuantiseToPalette(l->pixelData, palette)
+    filters::quantise_to_palette(l->pixelData, palette)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -547,7 +611,7 @@ void PixelPaintView::ApplyFloydSteinbergDithering(const std::vector<pelpaint::Pi
 {
     Layer* l = GetActiveLayer();
     if (!l) return;
-    filters::FloydSteinberg(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
+    filters::floyd_steinberg(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -590,7 +654,7 @@ void PixelPaintView::ConvertToGrayscale()
     Layer* l = GetActiveLayer();
     if (!l) return;
 
-    filters::ToGrayscale(l->pixelData)
+    filters::to_grayscale(l->pixelData)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -606,7 +670,7 @@ void PixelPaintView::ApplyAtkinsonDithering(const std::vector<pelpaint::Pixel>& 
 {
     Layer* l = GetActiveLayer();
     if (!l) return;
-    filters::Atkinson(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
+    filters::atkinson(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -622,7 +686,7 @@ void PixelPaintView::ApplyStuckiDithering(const std::vector<pelpaint::Pixel>& pa
 {
     Layer* l = GetActiveLayer();
     if (!l) return;
-    filters::Stucki(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
+    filters::stucki(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -638,7 +702,7 @@ void PixelPaintView::ApplyOrderedDithering(const std::vector<pelpaint::Pixel>& p
 {
     Layer* l = GetActiveLayer();
     if (!l) return;
-    filters::OrderedDithering(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
+    filters::ordered_dithering(l->pixelData, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -662,7 +726,7 @@ void PixelPaintView::ApplyPixelify(int pixelSize, bool usePalette)
                 : customPalette)
             : emptyPal;
 
-    filters::Pixelify(l->pixelData, canvasWidth, canvasHeight, pixelSize,
+    filters::pixelify(l->pixelData, canvasWidth, canvasHeight, pixelSize,
                       std::span<const Pixel>{pal})
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
@@ -688,7 +752,7 @@ void PixelPaintView::ApplyTriangulate()
     opts.generations = triGenerations;
     opts.edgeBias    = triEdgeBias;
 
-    filters::Triangulate(l->pixelData, canvasWidth, canvasHeight, opts)
+    filters::triangulate(l->pixelData, canvasWidth, canvasHeight, opts)
         .transform([&](std::vector<Pixel> out) {
             l->pixelData = std::move(out);
             canvas_.SetDirty();
@@ -696,6 +760,88 @@ void PixelPaintView::ApplyTriangulate()
             PushUndo("Triangulate");
         })
         .or_else([](const Error&) -> std::expected<void, Error> { return {}; });
+}
+
+void PixelPaintView::ApplyBlur()
+{
+    Layer* lay = GetActiveLayer();
+    if (!lay || lay->pixelData.empty()) return;
+    auto result = filters::blur(lay->pixelData, canvasWidth, canvasHeight,
+                                 blurRadius, blurGaussian);
+    if (!result.has_value()) return;
+    PushUndo("Blur");
+    lay->pixelData = std::move(*result);
+    canvas_.SetDirty();
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::ApplySharpen()
+{
+    Layer* lay = GetActiveLayer();
+    if (!lay || lay->pixelData.empty()) return;
+    auto result = filters::sharpen(lay->pixelData, canvasWidth, canvasHeight,
+                                    sharpenStrength);
+    if (!result.has_value()) return;
+    PushUndo("Sharpen");
+    lay->pixelData = std::move(*result);
+    canvas_.SetDirty();
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::ApplyEdgeDetect()
+{
+    Layer* lay = GetActiveLayer();
+    if (!lay || lay->pixelData.empty()) return;
+    const auto mode = (edgeDetectMode == 1)
+        ? filters::EdgeDetectMode::Laplacian
+        : filters::EdgeDetectMode::Sobel;
+    auto result = filters::edge_detect(lay->pixelData, canvasWidth, canvasHeight,
+                                       mode, edgeDetectThresh, edgeDetectInvert);
+    if (!result.has_value()) return;
+    PushUndo("Edge Detect");
+    lay->pixelData = std::move(*result);
+    canvas_.SetDirty();
+    textureNeedsUpdate = true;
+}
+
+void PixelPaintView::ApplyOutlineLayer()
+{
+    const Layer* src = GetActiveLayer();
+    if (!src || src->pixelData.empty()) return;
+
+    filters::OutlineConfig cfg;
+    cfg.mode          = static_cast<filters::OutlineMode>(outlineMode);
+    cfg.edge_mode      = static_cast<filters::OutlineEdge>(outlineEdgeMode);
+    cfg.pen_size       = outlinePenSize;
+    cfg.color          = outlineColor;
+    cfg.auto_lighten   = outlineAutoLighten;
+    cfg.lighten_factor = outlineLightenFactor;
+
+    auto result = filters::outline_layer(src->pixelData, canvasWidth, canvasHeight, cfg);
+    if (!result.has_value()) return;
+
+    PushUndo("Outline Layer");
+
+    // Update existing preview layer or create a new one
+    auto& layers = canvas_.Layers();  // mutable reference
+    if (outlineLayerIdx >= 0 && outlineLayerIdx < (int)layers.size()
+        && layers[outlineLayerIdx].name == "Outline") {
+        layers[outlineLayerIdx].pixelData = std::move(*result);
+    } else {
+        canvas_.AddLayer("Outline");
+        // The new layer is at the end or set as active — find it
+        outlineLayerIdx = canvas_.ActiveLayerIndex();
+        // Verify; if AddLayer does not set active, fall back to last index
+        if (outlineLayerIdx < 0 || outlineLayerIdx >= (int)canvas_.Layers().size()
+            || canvas_.Layers()[outlineLayerIdx].name != "Outline") {
+            outlineLayerIdx = static_cast<int>(canvas_.Layers().size()) - 1;
+        }
+        if (outlineLayerIdx >= 0 && outlineLayerIdx < (int)canvas_.Layers().size())
+            canvas_.Layers()[outlineLayerIdx].pixelData = std::move(*result);
+    }
+
+    canvas_.SetDirty();
+    textureNeedsUpdate = true;
 }
 
 //! @brief Calculate automatic pixel size based on image dimensions
@@ -1133,6 +1279,31 @@ void PixelPaintView::GenerateDepthMapLayer()
         .or_else([](const Error&) -> std::expected<void, Error> { return {}; });
 }
 
+bool PixelPaintView::SaveSVG(const std::string& filename)
+{
+    canvas_.Composite();
+    const core::ImageView coreView = canvas_.CompositeSurface().Flatten();
+    ImageView view;
+    view.data     = coreView.data;
+    view.width    = static_cast<std::uint32_t>(canvasWidth);
+    view.height   = static_cast<std::uint32_t>(canvasHeight);
+    view.stride   = view.width * 4;
+    view.channels = 4;
+
+    exporter::SvgExportOptions opts;
+    opts.scale           = std::max(1, svgScale);
+    opts.embedBackground = svgEmbedBackground;
+    opts.bgColor         = currentColor; // use current color as bg if embedding
+
+    bool ok = exporter::SvgExporter::SaveAsSvg(filename, view, opts);
+    if (ok) {
+        fs::path p(filename);
+        currentFilename = p.stem().string();
+        SaveLastDirectory(p.parent_path().string());
+    }
+    return ok;
+}
+
 bool PixelPaintView::SaveMesh(const std::string& filename)
 {
     if (meshExportGridSize < 1) meshExportGridSize = 1;
@@ -1147,21 +1318,38 @@ bool PixelPaintView::SaveMesh(const std::string& filename)
     view.channels = 4;
 
     MeshExportOptions options;
-    options.mode = static_cast<MeshMode>(meshExportMode);
-    options.gridSize = static_cast<std::uint32_t>(meshExportGridSize);
-    options.depthScale = 1.0f;
-    options.useVertexColors = true;
-    options.optimizeMesh = true;
-    options.flatZ = meshFlatZ;
+    options.mode             = static_cast<MeshMode>(meshExportMode);
+    options.gridSize         = static_cast<std::uint32_t>(meshExportGridSize);
+    options.maxZFraction     = meshDepthMaxZ / 100.0f;
+    options.useVertexColors  = true;
+    options.optimizeMesh     = true;
+    options.flatZ            = meshFlatZ;
+    options.invertDepth      = meshInvertDepth;
+    options.removeBackground = meshRemoveBg;
+    options.bgThreshold      = meshBgThreshold / 100.0f;
+    options.depthMode        = (meshDepthMode == 1)
+        ? MeshExportOptions::DepthMode::AlphaDist
+        : MeshExportOptions::DepthMode::Luma;
+
+    // Append mode suffix before the extension for easy identification
+    static const char* kModeSuffix[] = {"_plane", "_wire", "_lopoly", "_pixelmesh"};
+    std::string outFilename = filename;
+    {
+        fs::path p(filename);
+        const int modeIdx = std::clamp(meshExportMode, 0, 3);
+        outFilename = (p.parent_path() / (p.stem().string() + kModeSuffix[modeIdx])).string()
+                    + p.extension().string();
+    }
 
     pelpaint::ColorPalette fallback("Default", {});
     const bool paletteOk = selectedPaletteIndex >= 0 &&
                            selectedPaletteIndex < static_cast<int>(availablePalettes.size());
     const pelpaint::ColorPalette& palette = paletteOk ? availablePalettes[selectedPaletteIndex] : fallback;
 
-    bool success = MeshExporter::SaveAsMesh(filename, view, palette, options);
+    bool success = MeshExporter::SaveAsMesh(outFilename, view, palette, options);
     if (success) {
-        fs::path p(filename);
+        fs::path p(outFilename);
+        currentFilename = p.stem().string();
         SaveLastDirectory(p.parent_path().string());
     }
 
@@ -1197,6 +1385,45 @@ bool PixelPaintView::SaveToJPEG(const std::string& filename, int quality)  // NO
     }
 
     return success;
+}
+
+bool PixelPaintView::ExportAudioWav(const std::string& path)
+{
+    if (audio_.isAudioRunning()) {
+        audio_.stopAudio();
+        audioPlaying_ = false;
+    }
+
+    const float fps     = timeline_.FPS();
+    const int   nFrames = timeline_.FrameCount();
+
+    pelpaint::audio::WavRenderOptions opts;
+    if (nFrames > 0 && fps > 0.f) {
+        opts.durationSecs = static_cast<float>(nFrames) / fps;
+        opts.tailSecs     = 0.f;
+    } else {
+        opts.loopCount    = 2;
+        opts.tailSecs     = 0.5f;
+    }
+
+    const auto result = pelpaint::audio::WavRenderer::RenderToWav(audio_, path, opts);
+    return result.ok;
+}
+
+pelpaint::exporter::AnimExportResult
+PixelPaintView::ExportAnimPackage(const std::string& rootDir, const std::string& stem)
+{
+    if (audio_.isAudioRunning()) {
+        audio_.stopAudio();
+        audioPlaying_ = false;
+    }
+
+    pelpaint::exporter::AnimExportOptions opts;
+    opts.imageExt  = "png";
+    opts.frameStem = "frame";
+
+    return pelpaint::exporter::AnimExportPackage::Export(
+        rootDir, stem, timeline_, audio_, opts);
 }
 
 bool PixelPaintView::LoadFromImage(const std::string& filename)
@@ -1247,6 +1474,13 @@ bool PixelPaintView::LoadFromImage(const std::string& filename)
 bool PixelPaintView::IsRectSelectionActive() const
 {
     return currentSelection.isActive && currentSelection.type == SelectionData::Type::Rectangle;
+}
+
+bool PixelPaintView::IsSelectionToolActive() const noexcept
+{
+    return currentTool == DrawTool::RectangleSelect
+        || currentTool == DrawTool::CircleSelect
+        || currentTool == DrawTool::PolygonSelect;
 }
 
 bool PixelPaintView::IsPointInSelection(int x, int y) const
@@ -1872,6 +2106,47 @@ void PixelPaintView::ClearSelection()
     currentSelection.polygonPoints.clear();
 }
 
+void PixelPaintView::ApproximateSelectionToOutline()
+{
+    if (!IsRectSelectionActive()) return;
+    Layer* layer = GetActiveLayer();
+    if (!layer || layer->pixelData.empty()) return;
+
+    const auto x1c = static_cast<int>(std::floor(std::min(currentSelection.selectionStart.x, currentSelection.selectionEnd.x)));
+    const auto y1c = static_cast<int>(std::floor(std::min(currentSelection.selectionStart.y, currentSelection.selectionEnd.y)));
+    const auto x2c = static_cast<int>(std::floor(std::max(currentSelection.selectionStart.x, currentSelection.selectionEnd.x)));
+    const auto y2c = static_cast<int>(std::floor(std::max(currentSelection.selectionStart.y, currentSelection.selectionEnd.y)));
+
+    const int x1 = std::clamp(x1c, 0, canvasWidth  - 1);
+    const int y1 = std::clamp(y1c, 0, canvasHeight - 1);
+    const int x2 = std::clamp(x2c, 0, canvasWidth  - 1);
+    const int y2 = std::clamp(y2c, 0, canvasHeight - 1);
+
+    const uint8_t thr = static_cast<uint8_t>(
+        std::clamp(static_cast<int>(selectApproxThreshold), 1, 255));
+
+    int newX1 = x2, newY1 = y2, newX2 = x1, newY2 = y1;
+    bool found = false;
+
+    for (int y = y1; y <= y2; ++y) {
+        for (int x = x1; x <= x2; ++x) {
+            const Pixel& px = layer->pixelData[static_cast<size_t>(y * canvasWidth + x)];
+            if (px.a >= thr) {
+                newX1 = std::min(newX1, x);
+                newY1 = std::min(newY1, y);
+                newX2 = std::max(newX2, x);
+                newY2 = std::max(newY2, y);
+                found = true;
+            }
+        }
+    }
+
+    if (found) {
+        currentSelection.selectionStart = Point2f{static_cast<float>(newX1), static_cast<float>(newY1)};
+        currentSelection.selectionEnd   = Point2f{static_cast<float>(newX2), static_cast<float>(newY2)};
+    }
+}
+
 // Paste selection
 void PixelPaintView::PasteSelection(const ImVec2& pastePos)
 {
@@ -2233,6 +2508,12 @@ void PixelPaintView::HandleCanvasInput()
 
         if (currentTool == DrawTool::RectangleSelect || currentTool == DrawTool::CircleSelect) {
             CopySelection(canvasMousePos, canvasMousePos, currentTool == DrawTool::CircleSelect);
+        } else if (currentTool == DrawTool::PolygonSelect) {
+            if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                FinalizePolygonSelection();
+            } else {
+                AddPolygonPoint(canvasMousePos);
+            }
         } else if (currentTool == DrawTool::Eyedropper) {
             if (IsValidCoord(pixelX, pixelY)) {
                 currentColor = GetPixel(pixelX, pixelY);
@@ -2375,9 +2656,7 @@ void PixelPaintView::DrawToolbar()
         { DrawTool::Fill, "F", "Fill" },
         { DrawTool::Eyedropper, "I", "Eyedropper" },
         { DrawTool::Spray, "S", "Spray" },
-        { DrawTool::RectangleSelect, "R", "Rect Select" },
-        { DrawTool::CircleSelect, "C", "Circle Select" },
-        { DrawTool::PolygonSelect, "G", "Polygon Select" },
+        { DrawTool::RectangleSelect, "\xE2\x96\xA1", "Select (mode in panel)" },
         { DrawTool::BucketFill, "K", "Bucket Fill" }
     };
 
@@ -2396,22 +2675,33 @@ void PixelPaintView::DrawToolbar()
     for (int i = 0; i < toolCount; ++i) {
         const ToolButton& entry = toolButtons[i];
         const DrawTool    tool  = entry.tool;
-        const bool        selected = (currentTool == tool);
+        const bool        selected = (tool == DrawTool::RectangleSelect)
+            ? IsSelectionToolActive()
+            : (currentTool == tool);
 
         if (selected)
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.6f, 1.0f, 1.0f));
 
         if (ImGui::Button(entry.label, ImVec2(buttonW, buttonH))) {
-            if (tool == DrawTool::RectangleSelect || tool == DrawTool::CircleSelect) {
-                if (currentTool == tool) {
-                    ClearSelection();
-                    currentTool = DrawTool::Pencil;
+            if (tool == DrawTool::RectangleSelect) {
+                // "Sel" button: toggle the active selection when already on a
+                // selection tool; switch to the correct tool otherwise.
+                if (IsSelectionToolActive()) {
+                    if (currentSelection.isActive)
+                        ClearSelection();   // toggle: clear but stay on Select
+                    // else: already on select with no selection — do nothing
                 } else {
-                    currentTool = tool;
+                    // Switch to the select tool matching the current mode
+                    switch (currentSelectMode) {
+                        default:
+                        case SelectMode::Rectangle: currentTool = DrawTool::RectangleSelect; break;
+                        case SelectMode::Circle:    currentTool = DrawTool::CircleSelect;    break;
+                        case SelectMode::Polygon:   currentTool = DrawTool::PolygonSelect;   break;
+                    }
                 }
             } else {
-                if (currentSelection.isActive)
-                    ClearSelection();
+                // Non-select tools: switch without clearing the selection so
+                // bucket fill, pencil, etc. can operate within the active mask.
                 currentTool = tool;
             }
             if (tool == DrawTool::Clone)
@@ -2468,13 +2758,13 @@ void PixelPaintView::ApplyDithering(DitheringType type, const std::vector<pelpai
     auto applyKernel = [&](std::span<const Pixel> src) -> filters::FilterResult {
         switch (type) {
             case DitheringType::FloydSteinberg:
-                return filters::FloydSteinberg(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
+                return filters::floyd_steinberg(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
             case DitheringType::Atkinson:
-                return filters::Atkinson(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
+                return filters::atkinson(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
             case DitheringType::Stucki:
-                return filters::Stucki(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
+                return filters::stucki(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
             case DitheringType::Ordered:
-                return filters::OrderedDithering(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
+                return filters::ordered_dithering(src, canvasWidth, canvasHeight, palette, ditheringPreserveAlpha);
             default:
                 return std::unexpected(Error{ErrorCode::None, "Unknown dithering type"});
         }
@@ -2483,7 +2773,7 @@ void PixelPaintView::ApplyDithering(DitheringType type, const std::vector<pelpai
     // Monadic pipeline:
     //   optionally ToGrayscale  →  apply kernel  →  commit + undo push
     (doGray
-        ? filters::ToGrayscale(l->pixelData)
+        ? filters::to_grayscale(l->pixelData)
             .and_then([&](std::vector<Pixel> g) {
                 return applyKernel(std::span<const Pixel>{g});
             })
@@ -2845,20 +3135,36 @@ void PixelPaintView::DrawSelectionOverlay()
     }
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    ImVec2 imageSize = ImVec2(canvasWidth * canvasScale, canvasHeight * canvasScale);
-
-    // Draw dark overlay over entire canvas
-    drawList->AddRectFilled(
-        canvasPos,
-        ImVec2(canvasPos.x + imageSize.x, canvasPos.y + imageSize.y),
-        ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.5f))
-    );
+    const ImVec2 imageSize  = ImVec2(canvasWidth * canvasScale, canvasHeight * canvasScale);
+    const ImVec2 canvasEnd  = ImVec2(canvasPos.x + imageSize.x, canvasPos.y + imageSize.y);
+    const ImU32  maskColor  = ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, 0.5f));
 
     // Calculate screen positions for selection bounds
     ImVec2 selStart = CanvasToScreen(ToImVec2(currentSelection.selectionStart));
-    ImVec2 selEnd = CanvasToScreen(ToImVec2(currentSelection.selectionEnd));
+    ImVec2 selEnd   = CanvasToScreen(ToImVec2(currentSelection.selectionEnd));
+    // Normalise so selStart is always top-left
+    if (selStart.x > selEnd.x) std::swap(selStart.x, selEnd.x);
+    if (selStart.y > selEnd.y) std::swap(selStart.y, selEnd.y);
 
-    // Draw selection border
+    if (currentSelection.type == SelectionData::Type::Rectangle) {
+        // Punch-out mask: four strips around the selection leave the selected
+        // area at full brightness while dimming the rest of the canvas.
+        drawList->AddRectFilled(canvasPos,                           ImVec2(canvasEnd.x,  selStart.y), maskColor); // top
+        drawList->AddRectFilled(ImVec2(canvasPos.x,  selEnd.y),     canvasEnd,                        maskColor); // bottom
+        drawList->AddRectFilled(ImVec2(canvasPos.x,  selStart.y),   ImVec2(selStart.x,  selEnd.y),   maskColor); // left
+        drawList->AddRectFilled(ImVec2(selEnd.x,     selStart.y),   ImVec2(canvasEnd.x, selEnd.y),   maskColor); // right
+    } else {
+        // Circle / Polygon: full canvas dim + shape border drawn below
+        drawList->AddRectFilled(canvasPos, canvasEnd, maskColor);
+    }
+
+    // Animated marching-ants dash offset
+    const float dashSize  = 4.0f;
+    const float gapSize   = 4.0f;
+    const float dashCycle = dashSize + gapSize;
+    const float timeOff   = std::fmod(static_cast<float>(ImGui::GetTime()) * 20.0f, dashCycle);
+
+    // Alternating yellow / white ants
     ImU32 borderColor = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
 
     if (currentSelection.type == SelectionData::Type::Circle) {
@@ -2881,49 +3187,29 @@ void PixelPaintView::DrawSelectionOverlay()
         return;
     }
 
-    // Draw bright dashed border
-    float dashSize = 4.0f;
-    float gapSize = 4.0f;
-    bool drawDash = true;
-
-    // Top edge
-    for (float x = selStart.x; x < selEnd.x; x += dashSize + gapSize) {
-        if (drawDash) {
-            float endX = std::min(x + dashSize, selEnd.x);
-            drawList->AddLine(ImVec2(x, selStart.y), ImVec2(endX, selStart.y), borderColor, 2.0f);
+    // Animated marching-ants border
+    // Lambda draws one edge segment with time-offset dashes
+    auto drawEdge = [&](ImVec2 from, ImVec2 to, bool horizontal) {
+        const float len  = horizontal ? (to.x - from.x) : (to.y - from.y);
+        float pos = -timeOff;
+        bool  dash = true;
+        while (pos < len) {
+            const float start = std::max(0.0f, pos);
+            const float end   = std::min(len, pos + dashSize);
+            if (dash && end > start) {
+                ImVec2 p0 = horizontal ? ImVec2(from.x + start, from.y) : ImVec2(from.x, from.y + start);
+                ImVec2 p1 = horizontal ? ImVec2(from.x + end,   from.y) : ImVec2(from.x, from.y + end);
+                drawList->AddLine(p0, p1, borderColor, 2.0f);
+            }
+            pos  += dashCycle;
+            dash  = !dash;
         }
-        drawDash = !drawDash;
-    }
+    };
 
-    // Bottom edge
-    drawDash = true;
-    for (float x = selStart.x; x < selEnd.x; x += dashSize + gapSize) {
-        if (drawDash) {
-            float endX = std::min(x + dashSize, selEnd.x);
-            drawList->AddLine(ImVec2(x, selEnd.y), ImVec2(endX, selEnd.y), borderColor, 2.0f);
-        }
-        drawDash = !drawDash;
-    }
-
-    // Left edge
-    drawDash = true;
-    for (float y = selStart.y; y < selEnd.y; y += dashSize + gapSize) {
-        if (drawDash) {
-            float endY = std::min(y + dashSize, selEnd.y);
-            drawList->AddLine(ImVec2(selStart.x, y), ImVec2(selStart.x, endY), borderColor, 2.0f);
-        }
-        drawDash = !drawDash;
-    }
-
-    // Right edge
-    drawDash = true;
-    for (float y = selStart.y; y < selEnd.y; y += dashSize + gapSize) {
-        if (drawDash) {
-            float endY = std::min(y + dashSize, selEnd.y);
-            drawList->AddLine(ImVec2(selEnd.x, y), ImVec2(selEnd.x, endY), borderColor, 2.0f);
-        }
-        drawDash = !drawDash;
-    }
+    drawEdge(ImVec2(selStart.x, selStart.y), ImVec2(selEnd.x,   selStart.y), true);  // top
+    drawEdge(ImVec2(selStart.x, selEnd.y),   ImVec2(selEnd.x,   selEnd.y),   true);  // bottom
+    drawEdge(ImVec2(selStart.x, selStart.y), ImVec2(selStart.x, selEnd.y),   false); // left
+    drawEdge(ImVec2(selEnd.x,   selStart.y), ImVec2(selEnd.x,   selEnd.y),   false); // right
 
     // Floating action bar — shown above/below the selection
     DrawSelectionFab();
@@ -3259,18 +3545,63 @@ void PixelPaintView::DrawRightPanel()
 // TOOL TAB - Brush settings and editing tools
 void PixelPaintView::DrawToolTab()
 {
+    // Selection mode + controls section
+    if (ImGui::CollapsingHeader("Selection", ImGuiTreeNodeFlags_DefaultOpen)) {
+        // ---- Mode picker ----
+        ImGui::Text("Shape:");
+        ImGui::SameLine();
+        int selModeInt = static_cast<int>(currentSelectMode);
+        bool modeChanged = false;
+        modeChanged |= ImGui::RadioButton("Rect##sm",    &selModeInt, 0); ImGui::SameLine();
+        modeChanged |= ImGui::RadioButton("Circle##sm",  &selModeInt, 1); ImGui::SameLine();
+        modeChanged |= ImGui::RadioButton("Polygon##sm", &selModeInt, 2);
+        if (modeChanged) {
+            currentSelectMode = static_cast<SelectMode>(selModeInt);
+            // If a selection tool is already active, switch to the new shape's tool
+            if (IsSelectionToolActive()) {
+                switch (currentSelectMode) {
+                    default:
+                    case SelectMode::Rectangle: currentTool = DrawTool::RectangleSelect; break;
+                    case SelectMode::Circle:    currentTool = DrawTool::CircleSelect;    break;
+                    case SelectMode::Polygon:   currentTool = DrawTool::PolygonSelect;   break;
+                }
+            }
+        }
+
+        ImGui::Spacing();
+
+        const bool hasSelection = currentSelection.isActive;
+        if (hasSelection) {
+            // ---- Active selection actions ----
+            if (ImGui::Button("Clear Selection", ImVec2(-1, 0)))
+                ClearSelection();
+
+            if (currentSelection.type == SelectionData::Type::Rectangle) {
+                if (ImGui::Button("Crop to Selection", ImVec2(-1, 0)))
+                    CropToSelection();
+
+                ImGui::Separator();
+                ImGui::Text("Fit to Content:");
+                ImGui::SetItemTooltip(
+                    "Shrink the selection rectangle to tightly\n"
+                    "wrap opaque pixels on the active layer.");
+                ImGui::SliderFloat("##approxThresh", &selectApproxThreshold,
+                                   1.0f, 255.0f, "Alpha >= %.0f");
+                if (ImGui::Button("Approximate Outline", ImVec2(-1, 0)))
+                    ApproximateSelectionToOutline();
+            }
+        } else {
+            ImGui::TextDisabled("No active selection.");
+            ImGui::TextDisabled("Use \xE2\x96\xA1 (Select) on canvas.");
+        }
+    }
+    ImGui::Spacing();
+
     // Edit section
     if (ImGui::CollapsingHeader("Edit", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Button("Undo (Ctrl+Z)", ImVec2(-1, 0))) { Undo(); }
         if (ImGui::Button("Redo (Ctrl+Y)", ImVec2(-1, 0))) { Redo(); }
         ImGui::Separator();
-
-        if (IsRectSelectionActive()) {
-            if (ImGui::Button("Crop to Selection", ImVec2(-1, 0))) {
-                CropToSelection();
-            }
-            ImGui::Separator();
-        }
 
         if (ImGui::Button("Clear Canvas", ImVec2(-1, 0))) { ClearCanvas(); }
     }
@@ -3447,10 +3778,26 @@ void PixelPaintView::DrawColorTab()
 // FILTER TAB - Convert, Dithering, Pixelify, Shape Redraw filter
 void PixelPaintView::DrawFilterTab()
 {
+    // Color clamp helper for color pickers
+    auto clamp_u8 = [](float v) -> uint8_t {
+        return static_cast<uint8_t>(std::clamp(v, 0.f, 1.f) * 255.f);
+    };
+
+    // Accordion helper: forces ImGui's internal open/closed state, detects clicks.
+    // Returns true if this section should render its contents.
+    auto accordion = [&](const char* label, int idx) -> bool {
+        ImGuiID id = ImGui::GetID(label);
+        ImGui::GetStateStorage()->SetBool(id, m_filterOpenSection == idx);
+        const bool open = ImGui::CollapsingHeader(label);
+        if (open  && m_filterOpenSection != idx) m_filterOpenSection = idx;
+        if (!open && m_filterOpenSection == idx) m_filterOpenSection = -1;
+        return m_filterOpenSection == idx;
+    };
+
     // ----------------------------------------------------------------
-    // Convert
+    // 0: Convert
     // ----------------------------------------------------------------
-    if (ImGui::CollapsingHeader("Convert", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (accordion("Convert", 0)) {
         if (ImGui::Button("To Grayscale", ImVec2(-1, 0))) {
             ConvertToGrayscale();
         }
@@ -3458,9 +3805,108 @@ void PixelPaintView::DrawFilterTab()
     ImGui::Spacing();
 
     // ----------------------------------------------------------------
-    // Dithering
+    // 1: Blur
     // ----------------------------------------------------------------
-    if (ImGui::CollapsingHeader("Dithering", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (accordion("Blur", 1)) {
+        pelpaint::ui::SliderIntStepStateful(
+            "Radius", 1, 8, 1, "blur_radius", blurRadius,
+            [&](int v){ blurRadius = v; });
+        ImGui::Checkbox("Gaussian (3-pass)##blur", &blurGaussian);
+        ImGui::SetItemTooltip("Three box-blur passes approximate a Gaussian");
+        ImGui::Spacing();
+        if (ImGui::Button("Apply Blur##apply", ImVec2(-1, 0))) ApplyBlur();
+        ImGui::TextDisabled("Blurs the active layer. Undo available.");
+    }
+    ImGui::Spacing();
+
+    // ----------------------------------------------------------------
+    // 2: Sharpen
+    // ----------------------------------------------------------------
+    if (accordion("Sharpen", 2)) {
+        ImGui::SliderFloat("Strength##sharpen", &sharpenStrength, 0.f, 2.f, "%.2f");
+        ImGui::SetItemTooltip("0 = identity, 1 = standard, 2 = over-sharpen");
+        ImGui::Spacing();
+        if (ImGui::Button("Apply Sharpen##apply", ImVec2(-1, 0))) ApplySharpen();
+        ImGui::TextDisabled("3x3 unsharp mask on the active layer.");
+    }
+    ImGui::Spacing();
+
+    // ----------------------------------------------------------------
+    // 3: Edge Detect
+    // ----------------------------------------------------------------
+    if (accordion("Edge Detect", 3)) {
+        ImGui::Text("Method:");
+        ImGui::RadioButton("Sobel##edge",     &edgeDetectMode, 0); ImGui::SameLine();
+        ImGui::RadioButton("Laplacian##edge", &edgeDetectMode, 1);
+        ImGui::SliderFloat("Threshold##edge", &edgeDetectThresh, 0.f, 255.f, "%.0f");
+        ImGui::SetItemTooltip("Magnitudes below this become black");
+        ImGui::Checkbox("Invert##edge", &edgeDetectInvert);
+        ImGui::Spacing();
+        if (ImGui::Button("Apply Edge Detect##apply", ImVec2(-1, 0))) ApplyEdgeDetect();
+        ImGui::TextDisabled("Replaces active layer with detected edges.");
+    }
+    ImGui::Spacing();
+
+    // ----------------------------------------------------------------
+    // 4: Outline
+    // ----------------------------------------------------------------
+    if (accordion("Outline", 4)) {
+        ImGui::Text("Mode:");
+        ImGui::RadioButton("Outline##ol", &outlineMode, 0); ImGui::SameLine();
+        ImGui::RadioButton("Rim##ol",     &outlineMode, 1);
+        ImGui::SetItemTooltip("Rim sits 1px further outside the shape");
+
+        pelpaint::ui::SliderIntStepStateful(
+            "Pen Size", 1, 32, 1, "outline_pen_size", outlinePenSize,
+            [&](int v){ outlinePenSize = v; });
+
+        // Color picker
+        ImGui::Text("Color:");
+        ImGui::SameLine();
+        ImVec4 olCol(outlineColor.r / 255.f, outlineColor.g / 255.f,
+                     outlineColor.b / 255.f, outlineColor.a / 255.f);
+        if (ImGui::ColorButton("##olcol", olCol, 0, ImVec2(28, 28)))
+            ImGui::OpenPopup("OutlineColorPicker");
+        if (ImGui::BeginPopup("OutlineColorPicker")) {
+            float c[4] = { olCol.x, olCol.y, olCol.z, olCol.w };
+            if (ImGui::ColorPicker4("##olpicker", c)) {
+                outlineColor = { clamp_u8(c[0]), clamp_u8(c[1]),
+                                 clamp_u8(c[2]), clamp_u8(c[3]) };
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::Checkbox("Auto-Lighten (Rim)##ol", &outlineAutoLighten);
+        if (outlineAutoLighten) {
+            ImGui::SliderFloat("Factor##ol", &outlineLightenFactor, 0.f, 1.f, "%.2f");
+            ImGui::SetItemTooltip("0=no change, 1=white");
+        }
+
+        ImGui::Text("Edge:");
+        ImGui::RadioButton("Pixel Perfect##ol", &outlineEdgeMode, 0); ImGui::SameLine();
+        ImGui::RadioButton("Opacity##ol",       &outlineEdgeMode, 1);
+
+        ImGui::Spacing();
+
+        // Show handle status
+        if (outlineLayerIdx >= 0 && outlineLayerIdx < (int)canvas_.Layers().size()
+            && canvas_.Layers()[outlineLayerIdx].name == "Outline") {
+            ImGui::TextDisabled("Layer #%d will be updated.", outlineLayerIdx);
+            if (ImGui::Button("Apply / Update Outline##apply", ImVec2(-1, 0)))
+                ApplyOutlineLayer();
+        } else {
+            outlineLayerIdx = -1;  // stale handle — reset
+            if (ImGui::Button("Apply as New Layer##outline", ImVec2(-1, 0)))
+                ApplyOutlineLayer();
+        }
+        ImGui::TextDisabled("Writes outline to a separate alpha layer.");
+    }
+    ImGui::Spacing();
+
+    // ----------------------------------------------------------------
+    // 5: Dithering
+    // ----------------------------------------------------------------
+    if (accordion("Dithering", 5)) {
         ImGui::Checkbox("Preserve Alpha##dither", &ditheringPreserveAlpha);
         ImGui::Spacing();
 
@@ -3525,9 +3971,9 @@ void PixelPaintView::DrawFilterTab()
     ImGui::Spacing();
 
     // ----------------------------------------------------------------
-    // Pixelify
+    // 6: Pixelify
     // ----------------------------------------------------------------
-    if (ImGui::CollapsingHeader("Pixelify", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (accordion("Pixelify", 6)) {
         pelpaint::ui::SliderIntStepStateful(
             "Size", 1, 32, 1, "pixelify_size", pixelifySize,
             [&](int v){ pixelifySize = v; }
@@ -3543,9 +3989,9 @@ void PixelPaintView::DrawFilterTab()
     ImGui::Spacing();
 
     // ----------------------------------------------------------------
-    // Shape Redraw Filter
+    // 7: Shape Redraw
     // ----------------------------------------------------------------
-    if (ImGui::CollapsingHeader("Shape Redraw Filter", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (accordion("Shape Redraw", 7)) {
         // Shape mode combo
         const char* shapeModeNames[] = { "Square", "Dot (Circle)", "Custom (8x8)" };
         int shapeMode = static_cast<int>(shapeRedrawFilterMode);
@@ -3643,9 +4089,9 @@ void PixelPaintView::DrawFilterTab()
     ImGui::Spacing();
 
     // ----------------------------------------------------------------
-    // Triangulate (Triangula-style genetic algorithm)
+    // 8: Triangulate (Triangula-style genetic algorithm)
     // ----------------------------------------------------------------
-    if (ImGui::CollapsingHeader("Triangulate")) {
+    if (accordion("Triangulate", 8)) {
         ImGui::TextDisabled("Non-overlapping Delaunay triangulation optimised\nby a genetic algorithm (inspired by Triangula).");
         ImGui::Spacing();
 
@@ -3695,9 +4141,9 @@ void PixelPaintView::DrawFilterTab()
     ImGui::Spacing();
 
     // ----------------------------------------------------------------
-    // Depth Map Layer
+    // 9: Depth Map
     // ----------------------------------------------------------------
-    if (ImGui::CollapsingHeader("Depth Map Layer")) {
+    if (accordion("Depth Map", 9)) {
         ImGui::TextDisabled("Generates a depth map from canvas luma\nand adds it as a new layer.");
         ImGui::Spacing();
 
@@ -3706,9 +4152,9 @@ void PixelPaintView::DrawFilterTab()
         ImGui::RadioButton("Grayscale##depth",   &depthMapColorMode, 0);
         ImGui::SetItemTooltip("Black = far / dark, White = near / bright");
         ImGui::RadioButton("False Color##depth", &depthMapColorMode, 1);
-        ImGui::SetItemTooltip("Spectral ramp: violet → blue → teal → green → amber → pink");
+        ImGui::SetItemTooltip("Spectral ramp: violet \u2192 blue \u2192 teal \u2192 green \u2192 amber \u2192 pink");
         ImGui::RadioButton("Warm Tone##depth",   &depthMapColorMode, 2);
-        ImGui::SetItemTooltip("Classic pixel-art look: dark purple → magenta → orange → warm yellow");
+        ImGui::SetItemTooltip("Classic pixel-art look: dark purple \u2192 magenta \u2192 orange \u2192 warm yellow");
 
         ImGui::Spacing();
         ImGui::Checkbox("Invert depth##depth", &depthMapInvert);
@@ -3839,7 +4285,7 @@ void PixelPaintView::DrawFilesTab()
 #elif defined(__EMSCRIPTEN__)
     // Web/Emscripten: Use FileChooser abstraction for file dialogs
     ImGui::Text("Export");
-    const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh" };
+    const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh", "SVG Export", "Video" };
     ImGui::Combo("Export Type", &exportTypeIndex, exportTypes, static_cast<int>(sizeof(exportTypes) / sizeof(exportTypes[0])));
 
     if (exportTypeIndex == 0) {
@@ -3926,6 +4372,36 @@ void PixelPaintView::DrawFilesTab()
         meshExportGridSize = std::max(1, meshExportGridSize);
         ImGui::Checkbox("Flat Z (2D mesh)##mesh", &meshFlatZ);
         ImGui::SetItemTooltip("Use Z=0 for all solid pixels (correct for pixel art). Only Plane mode uses luma-based depth.");
+
+        // Depth settings
+        ImGui::Separator();
+        ImGui::Text("Depth:");
+        const char* depthModes[] = { "Luma (Brightness)", "Alpha Distance (best for cubes)" };
+        ImGui::Combo("Depth Mode##dm", &meshDepthMode, depthModes, 2);
+        ImGui::SetItemTooltip(
+            "Luma: bright pixels = near. "
+            "Alpha Distance: interior pixels (far from transparent edge) = near.\n"
+            "Use Alpha Distance for voxel/cube export to get a dome shape.");
+
+        pelpaint::ui::SliderFloatStepStateful(
+            "Max Z Height %", 1.0f, 300.0f, 1.0f, "mesh_maxz", meshDepthMaxZ,
+            [&](float v){ meshDepthMaxZ = v; });
+        ImGui::SetItemTooltip(
+            "Maximum Z extrusion as %% of canvas max dimension.\n"
+            "50 = half the canvas width. 100 = same as canvas width.");
+
+        ImGui::Checkbox("Invert Depth##mesh", &meshInvertDepth);
+        ImGui::SetItemTooltip("Swap near/far (dark = near, bright = far).");
+        ImGui::SameLine();
+        ImGui::Checkbox("Remove BG##mesh", &meshRemoveBg);
+        ImGui::SetItemTooltip("Exclude pixels whose depth falls below the threshold.");
+
+        if (meshRemoveBg) {
+            pelpaint::ui::SliderFloatStepStateful(
+                "BG Threshold %", 1.0f, 50.0f, 0.5f, "mesh_bgthresh", meshBgThreshold,
+                [&](float v){ meshBgThreshold = v; });
+        }
+
         if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
             FileChooser::Instance().SaveFileDialog(
                 "Save Mesh", ".ply", currentFilename + ".ply", "",
@@ -3936,6 +4412,95 @@ void PixelPaintView::DrawFilesTab()
                     }
                 }
             );
+        }
+    } else if (exportTypeIndex == 4) {
+        ImGui::Text("SVG Export");
+        pelpaint::ui::SliderIntStepStateful(
+            "Scale (px per SVG unit)", 1, 16, 1, "svg_scale", svgScale,
+            [&](int v){ svgScale = v; });
+        ImGui::SetItemTooltip("Upscale the SVG output. Scale=4: each pixel = 4x4 SVG units.");
+        ImGui::Checkbox("Embed Background##svg", &svgEmbedBackground);
+
+        if (ImGui::Button("Export SVG", ImVec2(-1, 0))) {
+            FileChooser::Instance().SaveFileDialog(
+                "Save SVG", ".svg", currentFilename + ".svg", "",
+                [this](const std::string& filepath) {
+                    if (!filepath.empty()) {
+                        SaveSVG(filepath);
+                        FileChooser::Instance().TriggerWASMDownload(filepath);
+                    }
+                }
+            );
+        }
+    } else if (exportTypeIndex == 5) {
+        // ---- Video export (WebM via MediaRecorder) -------------------
+        ImGui::SeparatorText("Animation Video Export");
+        ImGui::Spacing();
+
+        const int   nFrames = timeline_.FrameCount();
+        const float fps     = timeline_.FPS();
+        const float dur     = nFrames > 0 ? static_cast<float>(nFrames) / fps : 0.f;
+
+        ImGui::TextDisabled("%d frame%s  |  %.1f fps  |  ~%.2f s",
+                            nFrames, nFrames == 1 ? "" : "s", fps, dur);
+        ImGui::Spacing();
+
+        if (nFrames < 2) {
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 60, 255));
+            ImGui::TextWrapped(
+                "Open the Anim panel (bottom-bar 'Anim' button) and add "
+                "at least 2 frames to enable video export.");
+            ImGui::PopStyleColor();
+        } else {
+            ImGui::TextWrapped(
+                "Exports every animation frame via WebM/MediaRecorder. "
+                "A browser download dialog will appear once encoding finishes.");
+            ImGui::Spacing();
+
+            if (ImGui::Button("Export as Video  (.webm)", ImVec2(-1, 0))) {
+                // video_export() calls EM_ASM to invoke Module.startVideoExport()
+                // which is defined in shell.html and drives the MediaRecorder loop.
+                EM_ASM({ Module._video_export(); });
+            }
+            ImGui::SetItemTooltip(
+                "Encodes %d frames at %.1f fps into a WebM video.",
+                nFrames, fps);
+
+            ImGui::Spacing();
+            ImGui::SeparatorText("Audio");
+
+            const char* presetNames[] = {
+                "Acid 303", "C64 Lead", "C64 Bass", "C64 Arp", "Noise Drum", "Game Boy"
+            };
+            if (ImGui::Combo("Preset", &audioPresetIndex_, presetNames, 6)) {
+                audio_.applyChipPreset(
+                    static_cast<pelpaint::audio::AudioEngine::ChipPreset>(audioPresetIndex_));
+            }
+            ImGui::SliderInt("BPM", &audioBpm_, 60, 240);
+            if (audio_.sequencer.bpm != static_cast<float>(audioBpm_))
+                audio_.sequencer.bpm = static_cast<float>(audioBpm_);
+
+            if (ImGui::Button(audioPlaying_ ? "Stop Preview" : "Play Preview",
+                              ImVec2(-1, 0))) {
+                if (audioPlaying_) {
+                    audio_.stopAudio();
+                    audioPlaying_ = false;
+                } else {
+                    audio_.sequencer.rewind();
+                    audio_.sequencer.playing = true;
+                    audioPlaying_ = audio_.startAudio();
+                }
+            }
+
+            ImGui::Spacing();
+            if (ImGui::Button("Export Audio (.wav)", ImVec2(-1, 0))) {
+                const std::string tmpPath = "/tmp/audio.wav";
+                if (ExportAudioWav(tmpPath)) {
+                    FileChooser::Instance().TriggerWASMDownload(tmpPath, "audio.wav");
+                }
+            }
+            ImGui::SetItemTooltip("Renders the sequencer pattern as a 16-bit stereo WAV.\n"
+                                  "Duration matches the animation length.");
         }
     }
 
@@ -3981,7 +4546,7 @@ void PixelPaintView::DrawFilesTab()
         std::string startDir = lastDirectory.empty() ? GetHomeDirectory() : lastDirectory;
 
         ImGui::Text("Export");
-        const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh" };
+        const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh", "SVG Export", "Anim Package" };
         ImGui::Combo("Export Type", &exportTypeIndex, exportTypes, static_cast<int>(sizeof(exportTypes) / sizeof(exportTypes[0])));
 
         if (exportTypeIndex == 0) {
@@ -4048,12 +4613,122 @@ void PixelPaintView::DrawFilesTab()
             meshExportGridSize = std::max(1, meshExportGridSize);
             ImGui::Checkbox("Flat Z (2D mesh)##mesh", &meshFlatZ);
             ImGui::SetItemTooltip("Use Z=0 for all solid pixels (correct for pixel art). Only Plane mode uses luma-based depth.");
+
+            // Depth settings
+            ImGui::Separator();
+            ImGui::Text("Depth:");
+            const char* depthModesM[] = { "Luma (Brightness)", "Alpha Distance (best for cubes)" };
+            ImGui::Combo("Depth Mode##dm", &meshDepthMode, depthModesM, 2);
+            ImGui::SetItemTooltip(
+                "Luma: bright pixels = near. "
+                "Alpha Distance: interior pixels (far from transparent edge) = near.\n"
+                "Use Alpha Distance for voxel/cube export to get a dome shape.");
+
+            pelpaint::ui::SliderFloatStepStateful(
+                "Max Z Height %", 1.0f, 300.0f, 1.0f, "mesh_maxz", meshDepthMaxZ,
+                [&](float v){ meshDepthMaxZ = v; });
+            ImGui::SetItemTooltip(
+                "Maximum Z extrusion as %% of canvas max dimension.\n"
+                "50 = half the canvas width. 100 = same as canvas width.");
+
+            ImGui::Checkbox("Invert Depth##mesh", &meshInvertDepth);
+            ImGui::SetItemTooltip("Swap near/far (dark = near, bright = far).");
+            ImGui::SameLine();
+            ImGui::Checkbox("Remove BG##mesh", &meshRemoveBg);
+            ImGui::SetItemTooltip("Exclude pixels whose depth falls below the threshold.");
+
+            if (meshRemoveBg) {
+                pelpaint::ui::SliderFloatStepStateful(
+                    "BG Threshold %", 1.0f, 50.0f, 0.5f, "mesh_bgthresh", meshBgThreshold,
+                    [&](float v){ meshBgThreshold = v; });
+            }
+
             if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
                 FileChooser::Instance().SaveFileDialog(
                     "Save Mesh", ".ply", currentFilename + ".ply", startDir,
                     [this](const std::string& filepath) {
                         if (!filepath.empty()) SaveMesh(filepath);
                     });
+            }
+        } else if (exportTypeIndex == 4) {
+            ImGui::Text("SVG Export");
+            pelpaint::ui::SliderIntStepStateful(
+                "Scale (px per SVG unit)", 1, 16, 1, "svg_scale", svgScale,
+                [&](int v){ svgScale = v; });
+            ImGui::SetItemTooltip("Upscale the SVG output. Scale=4: each pixel = 4x4 SVG units.");
+            ImGui::Checkbox("Embed Background##svg", &svgEmbedBackground);
+
+            if (ImGui::Button("Export SVG", ImVec2(-1, 0))) {
+                FileChooser::Instance().SaveFileDialog(
+                    "Save SVG", ".svg", currentFilename + ".svg", startDir,
+                    [this](const std::string& filepath) {
+                        if (!filepath.empty()) SaveSVG(filepath);
+                    });
+            }
+        } else if (exportTypeIndex == 5) {
+            ImGui::SeparatorText("Animation Export Package");
+            ImGui::Spacing();
+
+            const int   nFrames = timeline_.FrameCount();
+            const float fps     = timeline_.FPS();
+            const float dur     = nFrames > 0 ? static_cast<float>(nFrames) / fps : 0.f;
+            ImGui::TextDisabled("%d frame%s  |  %.1f fps  |  ~%.2f s",
+                                nFrames, nFrames == 1 ? "" : "s", fps, dur);
+            ImGui::Spacing();
+
+            const char* presetNames[] = {
+                "Acid 303", "C64 Lead", "C64 Bass", "C64 Arp", "Noise Drum", "Game Boy"
+            };
+            if (ImGui::Combo("Audio Preset", &audioPresetIndex_, presetNames, 6)) {
+                audio_.applyChipPreset(
+                    static_cast<pelpaint::audio::AudioEngine::ChipPreset>(audioPresetIndex_));
+            }
+            ImGui::SliderInt("BPM##pkg", &audioBpm_, 60, 240);
+            if (audio_.sequencer.bpm != static_cast<float>(audioBpm_))
+                audio_.sequencer.bpm = static_cast<float>(audioBpm_);
+
+            if (ImGui::Button(audioPlaying_ ? "Stop Preview" : "Play Preview",
+                              ImVec2(-1, 0))) {
+                if (audioPlaying_) {
+                    audio_.stopAudio();
+                    audioPlaying_ = false;
+                } else {
+                    audio_.sequencer.rewind();
+                    audio_.sequencer.playing = true;
+                    audioPlaying_ = audio_.startAudio();
+                }
+            }
+
+            ImGui::Spacing();
+            if (nFrames < 1) {
+                ImGui::TextDisabled("Add frames in the Anim panel first.");
+            } else {
+                if (ImGui::Button("Export Package...", ImVec2(-1, 0))) {
+                    const std::string stem = fs::path(currentFilename).stem().string();
+                    FileChooser::Instance().SaveFileDialog(
+                        "Export Animation Package", ".json",
+                        stem + "_export.json", startDir,
+                        [this, stem](const std::string& filepath) {
+                            if (filepath.empty()) return;
+                            const std::string rootDir =
+                                fs::path(filepath).parent_path().string();
+                            const auto res = ExportAnimPackage(rootDir, stem);
+                            if (res.ok) {
+                                lastExportPackageDir_ = res.packageDir;
+                            }
+                        });
+                }
+                ImGui::SetItemTooltip(
+                    "Creates a subfolder with:\n"
+                    "  frames/frame_NNN.png  (all animation frames)\n"
+                    "  audio.wav             (sequencer render)\n"
+                    "  combine.sh / .bat     (ffmpeg one-liner)\n"
+                    "  info.json             (fps, bpm, duration)");
+
+                if (!lastExportPackageDir_.empty()) {
+                    ImGui::Spacing();
+                    ImGui::TextDisabled("Last export: %s", lastExportPackageDir_.c_str());
+                }
             }
         }
 
@@ -4094,7 +4769,7 @@ void PixelPaintView::DrawFilesTab()
         std::string startDir = lastDirectory.empty() ? GetHomeDirectory() : lastDirectory;
 
         ImGui::Text("Export");
-        const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh" };
+        const char* exportTypes[] = { "Image", "SVG", "Depth Map", "Mesh", "SVG Export" };
         ImGui::Combo("Export Type", &exportTypeIndex, exportTypes, static_cast<int>(sizeof(exportTypes) / sizeof(exportTypes[0])));
 
         if (exportTypeIndex == 0) {
@@ -4141,8 +4816,49 @@ void PixelPaintView::DrawFilesTab()
             meshExportGridSize = std::max(1, meshExportGridSize);
             ImGui::Checkbox("Flat Z (2D mesh)##mesh", &meshFlatZ);
             ImGui::SetItemTooltip("Use Z=0 for all solid pixels (correct for pixel art). Only Plane mode uses luma-based depth.");
+
+            // Depth settings
+            ImGui::Separator();
+            ImGui::Text("Depth:");
+            const char* depthModesW[] = { "Luma (Brightness)", "Alpha Distance (best for cubes)" };
+            ImGui::Combo("Depth Mode##dm", &meshDepthMode, depthModesW, 2);
+            ImGui::SetItemTooltip(
+                "Luma: bright pixels = near. "
+                "Alpha Distance: interior pixels (far from transparent edge) = near.\n"
+                "Use Alpha Distance for voxel/cube export to get a dome shape.");
+
+            pelpaint::ui::SliderFloatStepStateful(
+                "Max Z Height %", 1.0f, 300.0f, 1.0f, "mesh_maxz", meshDepthMaxZ,
+                [&](float v){ meshDepthMaxZ = v; });
+            ImGui::SetItemTooltip(
+                "Maximum Z extrusion as %% of canvas max dimension.\n"
+                "50 = half the canvas width. 100 = same as canvas width.");
+
+            ImGui::Checkbox("Invert Depth##mesh", &meshInvertDepth);
+            ImGui::SetItemTooltip("Swap near/far (dark = near, bright = far).");
+            ImGui::SameLine();
+            ImGui::Checkbox("Remove BG##mesh", &meshRemoveBg);
+            ImGui::SetItemTooltip("Exclude pixels whose depth falls below the threshold.");
+
+            if (meshRemoveBg) {
+                pelpaint::ui::SliderFloatStepStateful(
+                    "BG Threshold %", 1.0f, 50.0f, 0.5f, "mesh_bgthresh", meshBgThreshold,
+                    [&](float v){ meshBgThreshold = v; });
+            }
+
             if (ImGui::Button("Export Mesh", ImVec2(-1, 0))) {
                 ImGuiFileDialog::Instance()->OpenDialog("SaveMeshDialog", "Save Mesh", ".ply", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
+            }
+        } else if (exportTypeIndex == 4) {
+            ImGui::Text("SVG Export");
+            pelpaint::ui::SliderIntStepStateful(
+                "Scale (px per SVG unit)", 1, 16, 1, "svg_scale", svgScale,
+                [&](int v){ svgScale = v; });
+            ImGui::SetItemTooltip("Upscale the SVG output. Scale=4: each pixel = 4x4 SVG units.");
+            ImGui::Checkbox("Embed Background##svg", &svgEmbedBackground);
+
+            if (ImGui::Button("Export SVG", ImVec2(-1, 0))) {
+                ImGuiFileDialog::Instance()->OpenDialog("SaveSVGDialog", "Save SVG", ".svg", startDir, 1, nullptr, ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite);
             }
         }
 
@@ -4426,6 +5142,13 @@ void PixelPaintView::Draw(std::string_view label)
     if (ImGuiFileDialog::Instance()->Display("SaveMeshDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             SaveMesh(ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if (ImGuiFileDialog::Instance()->Display("SaveSVGDialog", ImGuiWindowFlags_NoCollapse, dialogSize, dialogSize)) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            SaveSVG(ImGuiFileDialog::Instance()->GetFilePathName());
         }
         ImGuiFileDialog::Instance()->Close();
     }

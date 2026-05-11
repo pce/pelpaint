@@ -1,264 +1,18 @@
+// filters/Filters.cpp
+
 #include "Filters.hpp"
 #include "Triangulate.hpp"
+#include "detail.hpp"
 
 #include <algorithm>
 #include <cmath>
 
 namespace pelpaint::filters {
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+using namespace detail;
 
-namespace {
 
-[[nodiscard]] inline int  pixIdx(int x, int y, int w) noexcept { return y * w + x; }
-[[nodiscard]] inline bool inBounds(int x, int y, int w, int h) noexcept {
-    return x >= 0 && x < w && y >= 0 && y < h;
-}
-[[nodiscard]] inline uint8_t clamp8(int v) noexcept {
-    return static_cast<uint8_t>(v < 0 ? 0 : v > 255 ? 255 : v);
-}
-
-} // anonymous namespace
-
-// ---------------------------------------------------------------------------
-// Colour metric helpers
-// ---------------------------------------------------------------------------
-
-float ColorDistance(const Pixel& a, const Pixel& b) noexcept {
-    const int dr = static_cast<int>(a.r) - b.r;
-    const int dg = static_cast<int>(a.g) - b.g;
-    const int db = static_cast<int>(a.b) - b.b;
-    const int da = static_cast<int>(a.a) - b.a;
-    return std::sqrt(static_cast<float>(dr*dr + dg*dg + db*db + da*da));
-}
-
-Pixel FindNearest(const Pixel& src, std::span<const Pixel> palette) noexcept {
-    if (palette.empty()) return src;
-    const Pixel* best     = &palette[0];
-    float        bestDist = ColorDistance(src, palette[0]);
-    for (const auto& p : palette) {
-        const float d = ColorDistance(src, p);
-        if (d < bestDist) { bestDist = d; best = &p; }
-    }
-    return *best;
-}
-
-// ---------------------------------------------------------------------------
-// ToGrayscale
-// ---------------------------------------------------------------------------
-
-FilterResult ToGrayscale(std::span<const Pixel> src) {
-    std::vector<Pixel> out;
-    try { out.assign(src.begin(), src.end()); }
-    catch (...) { return std::unexpected(Error::AllocFailed()); }
-
-    for (auto& px : out) {
-        const uint8_t g = clamp8(
-            static_cast<int>(0.299f * px.r + 0.587f * px.g + 0.114f * px.b));
-        px.r = px.g = px.b = g;
-    }
-    return out;
-}
-
-// ---------------------------------------------------------------------------
-// Floyd-Steinberg  (7 3 5 1  / 16 kernel)
-// ---------------------------------------------------------------------------
-
-FilterResult FloydSteinberg(
-    std::span<const Pixel> src,
-    int w, int h,
-    std::span<const Pixel> palette,
-    bool preserveAlpha)
-{
-    if (palette.empty())                 return std::unexpected(Error::EmptyPalette());
-    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
-
-    std::vector<Pixel> buf;
-    try { buf.assign(src.begin(), src.end()); }
-    catch (...) { return std::unexpected(Error::AllocFailed()); }
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const Pixel old = buf[pixIdx(x, y, w)];
-            Pixel       qnt = FindNearest(old, palette);
-            if (preserveAlpha) qnt.a = old.a;
-            buf[pixIdx(x, y, w)] = qnt;
-
-            const int er = old.r - qnt.r;
-            const int eg = old.g - qnt.g;
-            const int eb = old.b - qnt.b;
-
-            auto spread = [&](int nx, int ny, int num, int den) noexcept {
-                if (!inBounds(nx, ny, w, h)) return;
-                Pixel& n = buf[pixIdx(nx, ny, w)];
-                n.r = clamp8(n.r + er * num / den);
-                n.g = clamp8(n.g + eg * num / den);
-                n.b = clamp8(n.b + eb * num / den);
-            };
-            spread(x+1, y,   7, 16);
-            spread(x-1, y+1, 3, 16);
-            spread(x,   y+1, 5, 16);
-            spread(x+1, y+1, 1, 16);
-        }
-    }
-    return buf;
-}
-
-// ---------------------------------------------------------------------------
-// Atkinson  (1/8 kernel — distributes 6/8 of the error)
-// ---------------------------------------------------------------------------
-
-FilterResult Atkinson(
-    std::span<const Pixel> src,
-    int w, int h,
-    std::span<const Pixel> palette,
-    bool preserveAlpha)
-{
-    if (palette.empty())                 return std::unexpected(Error::EmptyPalette());
-    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
-
-    std::vector<Pixel> buf;
-    try { buf.assign(src.begin(), src.end()); }
-    catch (...) { return std::unexpected(Error::AllocFailed()); }
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const Pixel old = buf[pixIdx(x, y, w)];
-            Pixel       qnt = FindNearest(old, palette);
-            if (preserveAlpha) qnt.a = old.a;
-            buf[pixIdx(x, y, w)] = qnt;
-
-            const int er = old.r - qnt.r;
-            const int eg = old.g - qnt.g;
-            const int eb = old.b - qnt.b;
-
-            // Six neighbours each receive 1/8 of the error.
-            auto spread = [&](int nx, int ny) noexcept {
-                if (!inBounds(nx, ny, w, h)) return;
-                Pixel& n = buf[pixIdx(nx, ny, w)];
-                n.r = clamp8(n.r + er / 8);
-                n.g = clamp8(n.g + eg / 8);
-                n.b = clamp8(n.b + eb / 8);
-            };
-            spread(x+1, y  );
-            spread(x+2, y  );
-            spread(x-1, y+1);
-            spread(x,   y+1);
-            spread(x+1, y+1);
-            spread(x,   y+2);
-        }
-    }
-    return buf;
-}
-
-// ---------------------------------------------------------------------------
-// Stucki  (wide kernel, denominator 42)
-// ---------------------------------------------------------------------------
-//
-// Row  0:              X   8   4
-// Row +1:  2   4   8   4   2
-// Row +2:  1   2   4   2   1
-
-FilterResult Stucki(
-    std::span<const Pixel> src,
-    int w, int h,
-    std::span<const Pixel> palette,
-    bool preserveAlpha)
-{
-    if (palette.empty())                 return std::unexpected(Error::EmptyPalette());
-    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
-
-    std::vector<Pixel> buf;
-    try { buf.assign(src.begin(), src.end()); }
-    catch (...) { return std::unexpected(Error::AllocFailed()); }
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const Pixel old = buf[pixIdx(x, y, w)];
-            Pixel       qnt = FindNearest(old, palette);
-            if (preserveAlpha) qnt.a = old.a;
-            buf[pixIdx(x, y, w)] = qnt;
-
-            const int er = old.r - qnt.r;
-            const int eg = old.g - qnt.g;
-            const int eb = old.b - qnt.b;
-
-            auto spread = [&](int nx, int ny, int num) noexcept {
-                if (!inBounds(nx, ny, w, h)) return;
-                Pixel& n = buf[pixIdx(nx, ny, w)];
-                n.r = clamp8(n.r + er * num / 42);
-                n.g = clamp8(n.g + eg * num / 42);
-                n.b = clamp8(n.b + eb * num / 42);
-            };
-            // Row 0
-            spread(x+1, y,    8);
-            spread(x+2, y,    4);
-            // Row +1
-            spread(x-2, y+1,  2);
-            spread(x-1, y+1,  4);
-            spread(x,   y+1,  8);
-            spread(x+1, y+1,  4);
-            spread(x+2, y+1,  2);
-            // Row +2
-            spread(x-2, y+2,  1);
-            spread(x-1, y+2,  2);
-            spread(x,   y+2,  4);
-            spread(x+1, y+2,  2);
-            spread(x+2, y+2,  1);
-        }
-    }
-    return buf;
-}
-
-// ---------------------------------------------------------------------------
-// Ordered dithering  (Bayer 4x4 threshold matrix)
-// ---------------------------------------------------------------------------
-
-FilterResult OrderedDithering(
-    std::span<const Pixel> src,
-    int w, int h,
-    std::span<const Pixel> palette,
-    bool preserveAlpha)
-{
-    if (palette.empty())                 return std::unexpected(Error::EmptyPalette());
-    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
-
-    static constexpr int kBayer[4][4] = {
-        { 0,  8,  2, 10},
-        {12,  4, 14,  6},
-        { 3, 11,  1,  9},
-        {15,  7, 13,  5},
-    };
-
-    std::vector<Pixel> out;
-    try { out.reserve(src.size()); }
-    catch (...) { return std::unexpected(Error::AllocFailed()); }
-
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
-            const Pixel p  = src[pixIdx(x, y, w)];
-            const int   dv = kBayer[y % 4][x % 4];
-            const Pixel dithered{
-                clamp8(static_cast<int>(p.r) + dv - 8),
-                clamp8(static_cast<int>(p.g) + dv - 8),
-                clamp8(static_cast<int>(p.b) + dv - 8),
-                p.a,
-            };
-            Pixel qnt = FindNearest(dithered, palette);
-            if (preserveAlpha) qnt.a = p.a;
-            out.push_back(qnt);
-        }
-    }
-    return out;
-}
-
-// ---------------------------------------------------------------------------
-// QuantiseToPalette
-// ---------------------------------------------------------------------------
-
-FilterResult QuantiseToPalette(
+FilterResult quantise_to_palette(
     std::span<const Pixel> src,
     std::span<const Pixel> palette)
 {
@@ -269,24 +23,20 @@ FilterResult QuantiseToPalette(
     catch (...) { return std::unexpected(Error::AllocFailed()); }
 
     for (const auto& p : src)
-        out.push_back(FindNearest(p, palette));
+        out.push_back(find_nearest(p, palette));
 
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// Pixelify
-// ---------------------------------------------------------------------------
 
-FilterResult Pixelify(
+FilterResult pixelify(
     std::span<const Pixel> src,
     int w, int h,
     int blockSize,
     std::span<const Pixel> palette)
 {
     if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
-    if (blockSize < 1)
-        return std::unexpected(Error{ErrorCode::InvalidGridSize, "blockSize must be >= 1"});
+    if (blockSize <= 0)                   return std::unexpected(Error::InvalidGridSz());
 
     std::vector<Pixel> out;
     try { out.assign(src.begin(), src.end()); }
@@ -296,44 +46,245 @@ FilterResult Pixelify(
         for (int bx = 0; bx < w; bx += blockSize) {
             const int maxX = std::min(bx + blockSize, w);
             const int maxY = std::min(by + blockSize, h);
-
             int sumR = 0, sumG = 0, sumB = 0, sumA = 0, count = 0;
-            for (int y = by; y < maxY; ++y) {
+            for (int y = by; y < maxY; ++y)
                 for (int x = bx; x < maxX; ++x) {
-                    const Pixel& p = src[pixIdx(x, y, w)];
-                    sumR += p.r; sumG += p.g; sumB += p.b; sumA += p.a;
-                    ++count;
+                    const Pixel& p = src[pix_idx(x, y, w)];
+                    sumR += p.r; sumG += p.g; sumB += p.b; sumA += p.a; ++count;
                 }
-            }
-
             Pixel avg{
                 clamp8(sumR / count),
                 clamp8(sumG / count),
                 clamp8(sumB / count),
                 clamp8(sumA / count),
             };
-            if (!palette.empty()) avg = FindNearest(avg, palette);
-
+            if (!palette.empty()) avg = find_nearest(avg, palette);
             for (int y = by; y < maxY; ++y)
                 for (int x = bx; x < maxX; ++x)
-                    out[pixIdx(x, y, w)] = avg;
+                    out[pix_idx(x, y, w)] = avg;
         }
     }
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// Triangulate
-// ---------------------------------------------------------------------------
 
-FilterResult Triangulate(
+FilterResult blur(
     std::span<const Pixel> src,
     int w, int h,
+    int radius,
+    bool gaussian)
+{
+    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
+    if (radius <= 0)                      return std::unexpected(Error::InvalidDims());
+
+    std::vector<Pixel> a, b;
+    try {
+        a.assign(src.begin(), src.end());
+        b.resize(src.size());
+    } catch (...) { return std::unexpected(Error::AllocFailed()); }
+
+    const int passes = gaussian ? 3 : 1;
+    for (int pass = 0; pass < passes; ++pass) {
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int R = 0, G = 0, B = 0, A = 0, cnt = 0;
+                for (int ky = -radius; ky <= radius; ++ky)
+                    for (int kx = -radius; kx <= radius; ++kx) {
+                        const int nx = x + kx;
+                        const int ny = y + ky;
+                        if (!in_bounds(nx, ny, w, h)) continue;
+                        const auto& p = a[pix_idx(nx, ny, w)];
+                        R += p.r; G += p.g; B += p.b; A += p.a; ++cnt;
+                    }
+                b[pix_idx(x, y, w)] = {
+                    clamp8(R / cnt), clamp8(G / cnt),
+                    clamp8(B / cnt), clamp8(A / cnt),
+                };
+            }
+        }
+        std::swap(a, b);
+    }
+    return a;
+}
+
+
+
+FilterResult sharpen(
+    std::span<const Pixel> src,
+    int w, int h,
+    float strength)
+{
+    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
+
+    constexpr int K[3][3] = {
+        { 0,-1, 0}, {-1, 4,-1}, { 0,-1, 0}
+    };
+
+    std::vector<Pixel> out;
+    try { out.reserve(src.size()); }
+    catch (...) { return std::unexpected(Error::AllocFailed()); }
+
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            int R = 0, G = 0, B = 0;
+            for (int ky = -1; ky <= 1; ++ky)
+                for (int kx = -1; kx <= 1; ++kx) {
+                    const auto& p = src[pix_idx(
+                        std::clamp(x + kx, 0, w-1),
+                        std::clamp(y + ky, 0, h-1), w)];
+                    const int k = K[ky+1][kx+1];
+                    R += p.r * k; G += p.g * k; B += p.b * k;
+                }
+            const auto& orig = src[pix_idx(x, y, w)];
+            out.push_back({
+                clamp8(static_cast<int>(orig.r + strength * R)),
+                clamp8(static_cast<int>(orig.g + strength * G)),
+                clamp8(static_cast<int>(orig.b + strength * B)),
+                orig.a,
+            });
+        }
+    }
+    return out;
+}
+
+
+FilterResult edge_detect(
+    std::span<const Pixel> src,
+    int w, int h,
+    EdgeDetectMode mode,
+    float threshold,
+    bool invert_output)
+{
+    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
+
+    auto lum = [](const Pixel& p) noexcept {
+        return 0.299f * p.r + 0.587f * p.g + 0.114f * p.b;
+    };
+
+    std::vector<float> mag(static_cast<size_t>(w * h), 0.f);
+    float maxMag = 1.f;
+
+    for (int y = 1; y < h-1; ++y) {
+        for (int x = 1; x < w-1; ++x) {
+            const float tl = lum(src[pix_idx(x-1,y-1,w)]);
+            const float tc = lum(src[pix_idx(x,  y-1,w)]);
+            const float tr = lum(src[pix_idx(x+1,y-1,w)]);
+            const float ml = lum(src[pix_idx(x-1,y,  w)]);
+            const float mr = lum(src[pix_idx(x+1,y,  w)]);
+            const float bl = lum(src[pix_idx(x-1,y+1,w)]);
+            const float bc = lum(src[pix_idx(x,  y+1,w)]);
+            const float br = lum(src[pix_idx(x+1,y+1,w)]);
+
+            float m = 0.f;
+            if (mode == EdgeDetectMode::Sobel) {
+                const float gx = -tl + tr - 2*ml + 2*mr - bl + br;
+                const float gy = -tl - 2*tc - tr + bl + 2*bc + br;
+                m = std::sqrt(gx*gx + gy*gy);
+            } else {
+                // Laplacian
+                m = std::abs(-tl - tc - tr - ml + 8*lum(src[pix_idx(x,y,w)]) - mr - bl - bc - br);
+            }
+            mag[pix_idx(x, y, w)] = m;
+            maxMag = std::max(maxMag, m);
+        }
+    }
+
+    std::vector<Pixel> out;
+    try { out.resize(src.size(), {0, 0, 0, 0}); }
+    catch (...) { return std::unexpected(Error::AllocFailed()); }
+
+    const float scale = 255.f / maxMag;
+    const auto  thr   = static_cast<uint8_t>(threshold);
+    for (int i = 0; i < w * h; ++i) {
+        uint8_t v = clamp8(static_cast<int>(mag[i] * scale));
+        if (v < thr) v = 0;
+        if (invert_output) v = 255 - v;
+        out[i] = {v, v, v, src[i].a};
+    }
+    return out;
+}
+
+FilterResult outline_layer(
+    std::span<const Pixel> src,
+    int w, int h,
+    const OutlineConfig& cfg)
+{
+    if (src.empty() || w <= 0 || h <= 0) return std::unexpected(Error::InvalidDims());
+
+    const int N       = w * h;
+    const int minDist = 1;
+    const int maxDist = cfg.pen_size + 1;
+
+    std::vector<int> distField(N, INT_MAX);
+    std::vector<int> queue;
+    queue.reserve(N);
+
+    // Seed: opaque pixels are "inside" at distance 0.
+    for (int i = 0; i < N; ++i)
+        if (src[i].a >= cfg.alpha_threshold) {
+            distField[i] = 0;
+            queue.push_back(i);
+        }
+
+    // BFS to fill distance field.
+    for (int qi = 0; qi < static_cast<int>(queue.size()); ++qi) {
+        const int idx = queue[qi];
+        const int d   = distField[idx];
+        if (d >= maxDist) continue;
+        const int x = idx % w;
+        const int y = idx / w;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                const int nx   = x + dx;
+                const int ny   = y + dy;
+                if (!in_bounds(nx, ny, w, h)) continue;
+                const int nidx = pix_idx(nx, ny, w);
+                if (distField[nidx] == INT_MAX) {
+                    distField[nidx] = d + 1;
+                    queue.push_back(nidx);
+                }
+            }
+    }
+
+    // Build ring colour (optionally lightened).
+    Pixel ring = cfg.color;
+    if (cfg.auto_lighten) {
+        const float f = cfg.lighten_factor;
+        ring.r = clamp8(ring.r + static_cast<int>((255 - ring.r) * f));
+        ring.g = clamp8(ring.g + static_cast<int>((255 - ring.g) * f));
+        ring.b = clamp8(ring.b + static_cast<int>((255 - ring.b) * f));
+    }
+
+    std::vector<Pixel> out(N, {0, 0, 0, 0});
+    const float fadeRange = static_cast<float>(cfg.pen_size);
+
+    for (int i = 0; i < N; ++i) {
+        const int d = distField[i];
+        if (d < minDist || d >= maxDist) continue;  // inside or outside ring
+
+        uint8_t alpha = ring.a;
+        if (cfg.edge_mode == OutlineEdge::Opacity) {
+            const float fade = 1.f - (static_cast<float>(d - minDist) / fadeRange);
+            alpha = static_cast<uint8_t>(ring.a * fade);
+        }
+        out[i] = {ring.r, ring.g, ring.b, alpha};
+
+        // Rim mode: blend away the interior-facing edge (d==minDist).
+        if (cfg.mode == OutlineMode::Rim && d == minDist)
+            out[i].a = static_cast<uint8_t>(alpha / 2);
+    }
+    return out;
+}
+
+
+
+FilterResult triangulate(
+    std::span<const Pixel>    src,
+    int                       w,
+    int                       h,
     const TriangulateOptions& opts)
 {
-    if (src.empty() || w <= 0 || h <= 0)
-        return std::unexpected(Error::InvalidDims());
-
     try {
         return TriangulateImage(src, w, h, opts);
     } catch (...) {

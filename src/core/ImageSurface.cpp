@@ -183,6 +183,28 @@ void ImageSurface::WriteFlat(std::span<const PixelRGBA8> pixels)
     }
 }
 
+void ImageSurface::WriteFlat(PixelMdspan2d view)
+{
+    if (view.extent(0) != m_height || view.extent(1) != m_width) return;
+
+    for (std::uint32_t ty = 0; ty < m_tilesY; ++ty) {
+        for (std::uint32_t tx = 0; tx < m_tilesX; ++tx) {
+            Tile& tile = EnsureTile(tx, ty);
+            const std::uint32_t tw = TileWidth(tx);
+            const std::uint32_t th = TileHeight(ty);
+
+            for (std::uint32_t row = 0; row < th; ++row) {
+                const PixelRGBA8* srcRow = view.data_handle()
+                    + (ty * TileSize + row) * view.extent(1)
+                    + tx * TileSize;
+                PixelRGBA8* dstRow = tile.pixels.data() + row * TileSize;
+                std::copy(srcRow, srcRow + tw, dstRow);
+            }
+            tile.dirty = true;
+        }
+    }
+}
+
 // Flatten: iterates tiles directly (no per-pixel GetPixel overhead).
 // Returns a non-owning view into m_flattenScratch — valid until the next
 // call to Flatten() or Resize().
