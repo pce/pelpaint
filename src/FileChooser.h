@@ -7,6 +7,13 @@
 // Callback for file selection: filepath is empty string if cancelled
 using FileChooserCallback = std::function<void(const std::string& filepath)>;
 
+// Forward-declare the Emscripten C callback so the friend declaration inside
+// FileChooser refers to the C-linkage version (extern "C" and C++ friend
+// declarations must agree on linkage).
+#ifdef __EMSCRIPTEN__
+extern "C" void file_chooser_on_file_selected(const char* filename);
+#endif
+
 class FileChooser
 {
 public:

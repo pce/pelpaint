@@ -2,6 +2,7 @@
 
 #include "dithering.hpp"
 #include "detail.hpp"
+#include <algorithm>
 
 namespace pelpaint::filters {
 
@@ -197,6 +198,131 @@ FilterResult ordered_dithering(
         }
     }
     return out;
+}
+
+} // namespace pelpaint::filters
+
+// ============================================================================
+// Dithering 2.0 helpers
+// ============================================================================
+
+namespace pelpaint::filters {
+
+std::vector<Pixel> normalize_contrast(std::span<const Pixel> src)
+{
+    if (src.empty()) return {};
+
+    uint8_t rMin = 255, rMax = 0;
+    uint8_t gMin = 255, gMax = 0;
+    uint8_t bMin = 255, bMax = 0;
+
+    for (const auto& p : src) {
+        rMin = std::min(rMin, p.r); rMax = std::max(rMax, p.r);
+        gMin = std::min(gMin, p.g); gMax = std::max(gMax, p.g);
+        bMin = std::min(bMin, p.b); bMax = std::max(bMax, p.b);
+    }
+
+    auto stretch = [](uint8_t v, uint8_t lo, uint8_t hi) -> uint8_t {
+        if (hi == lo) return v;
+        return static_cast<uint8_t>(((static_cast<int>(v) - lo) * 255) / (hi - lo));
+    };
+
+    std::vector<Pixel> out;
+    out.reserve(src.size());
+    for (const auto& p : src)
+        out.push_back({
+            stretch(p.r, rMin, rMax),
+            stretch(p.g, gMin, gMax),
+            stretch(p.b, bMin, bMax),
+            p.a
+        });
+    return out;
+}
+
+std::vector<Pixel> scale_nearest(
+    std::span<const Pixel> src,
+    int srcW, int srcH,
+    int dstW, int dstH)
+{
+    std::vector<Pixel> out;
+    out.reserve(static_cast<std::size_t>(dstW) * static_cast<std::size_t>(dstH));
+
+    for (int y = 0; y < dstH; ++y) {
+        const int sy = (y * srcH) / dstH;
+        for (int x = 0; x < dstW; ++x) {
+            const int sx = (x * srcW) / dstW;
+            out.push_back(src[static_cast<std::size_t>(sy * srcW + sx)]);
+        }
+    }
+    return out;
+}
+
+FilterResult apply_dither_pipeline(
+    std::span<const Pixel> src,
+    int                    w,
+    int                    h,
+    std::span<const Pixel> palette,
+    DitheringFn            fn,
+    const DitherOptions&   opts,
+    bool                   preserve_alpha)
+{
+    if (src.empty() || w <= 0 || h <= 0)
+        return std::unexpected(Error::InvalidDims());
+
+    // Clamp pixelDensity to (0, 1]
+    const float density = (opts.pixelDensity > 0.f)
+                        ? std::min(opts.pixelDensity, 1.0f)
+                        : 1.0f;
+
+    // Compute working dimensions based on frameResolution + pixelDensity
+    int workW = w;
+    int workH = h;
+
+    const int frame = static_cast<int>(opts.frameResolution);
+    if (frame > 0 && (w > frame || h > frame)) {
+        // Scale the longest edge to `frame`, preserve aspect ratio
+        if (w >= h) {
+            workW = frame;
+            workH = std::max(1, (h * frame) / w);
+        } else {
+            workH = frame;
+            workW = std::max(1, (w * frame) / h);
+        }
+    }
+
+    // Apply pixelDensity on top of the frame resolution
+    workW = std::max(1, static_cast<int>(static_cast<float>(workW) * density));
+    workH = std::max(1, static_cast<int>(static_cast<float>(workH) * density));
+
+    const bool needsScale = (workW != w || workH != h);
+
+    // 1. Pre-pass: histogram normalisation
+    std::vector<Pixel> preBuffer;
+    std::span<const Pixel> working = src;
+
+    if (opts.preNormalize) {
+        preBuffer = normalize_contrast(src);
+        working   = preBuffer;
+    }
+
+    // 2. Pre-pass: downscale to working resolution
+    std::vector<Pixel> downBuffer;
+    if (needsScale) {
+        downBuffer = scale_nearest(working, w, h, workW, workH);
+        working    = downBuffer;
+    }
+
+    // 3. Core dithering at working resolution
+    auto result = fn(working, workW, workH, palette, preserve_alpha);
+    if (!result) return result;
+
+    // 4. Post-pass: nearest-neighbour upscale back to original dimensions
+    if (needsScale && opts.postNearestScale) {
+        auto upscaled = scale_nearest(*result, workW, workH, w, h);
+        return upscaled;
+    }
+
+    return result;
 }
 
 } // namespace pelpaint::filters

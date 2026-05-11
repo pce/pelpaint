@@ -5,7 +5,7 @@
 #include <imgui.h>
 #include <implot.h>
 #include "ImGuiFileDialog.h"
-#include "ImGuiStyle.hpp"
+#include "ui/ImGuiStyle.hpp"
 
 #if defined(USE_METAL_BACKEND)
     #include "imgui_impl_sdl3.h"

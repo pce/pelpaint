@@ -68,8 +68,7 @@ EMSCRIPTEN_KEEPALIVE void video_export()
         if (typeof Module.startVideoExport === 'function') {
             Module.startVideoExport();
         } else {
-            console.error('[pelpaint] Module.startVideoExport is not defined. '
-                          'Check shell.html for the JS implementation.');
+            console.error('[pelpaint] Module.startVideoExport is not defined. Check shell.html for the JS implementation.');
         }
     });
 }

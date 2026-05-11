@@ -1,8 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <expected>
 #include <functional>
-#include <stop_token>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -13,10 +14,35 @@
 
 namespace pelpaint::effects {
 
+/// Portable cancellation token compatible with Emscripten and all desktop
+/// targets.  Drop-in replacement for std::stop_token (same stop_requested()
+/// API) without the C++20 <stop_token> / jthread dependency.
+///
+/// Default-constructed = never cancels.  To wire up cancellation:
+///
+///   auto flag = std::make_shared<std::atomic<bool>>(false);
+///   BakeControl ctl{ CancelToken(flag) };
+///   // ... later, from another thread:
+///   flag->store(true);
+///
+class CancelToken {
+public:
+    CancelToken() = default;
+    explicit CancelToken(std::shared_ptr<std::atomic<bool>> flag)
+        : flag_(std::move(flag)) {}
+
+    [[nodiscard]] bool stop_requested() const noexcept {
+        return flag_ && flag_->load(std::memory_order_relaxed);
+    }
+
+private:
+    std::shared_ptr<std::atomic<bool>> flag_;
+};
+
 /// Cancellation and progress for long bakes.
 /// Default-constructed = uncancellable, no progress callback.
 struct BakeControl {
-    std::stop_token               stopToken;            ///< default: never stops
+    CancelToken                   stopToken;            ///< default: never stops
     std::function<void(int,int)>  onProgress = nullptr; ///< (stepDone, total); nullptr = no-op
 };
 

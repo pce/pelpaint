@@ -27,6 +27,14 @@
 #include <emscripten.h>
 #include <cstdint>
 
+namespace pelpaint {
+    class PixelPaintView;
+    /// Global pointer set by PixelPaintView's constructor so the
+    /// EMSCRIPTEN_KEEPALIVE C functions can reach the view without
+    /// coupling VideoExport.cpp to every PixelPaintView header.
+    extern PixelPaintView* g_VideoExportView;
+} // namespace pelpaint
+
 extern "C" {
 
 /// Total number of animation frames in the current timeline.

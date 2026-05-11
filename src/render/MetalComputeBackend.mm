@@ -18,7 +18,6 @@
 #include <numeric>
 #include <ranges>
 #include <span>
-#include <stop_token>
 
 #include "../filters/Filters.hpp"
 

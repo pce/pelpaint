@@ -192,12 +192,13 @@ inline bool SliderFloatStepStateful(const char*                label,
 // ---------------------------------------------------------------------------
 
 inline bool LayerPanel(std::vector<pelpaint::Layer>& layers,
-                       int& activeLayerIndex,
-                       int& nextLayerId,
-                       const std::function<void(const std::string&)>& addLayer,
-                       const std::function<void(int)>&                removeLayer,
-                       const std::function<void(int, int)>&           reorderLayers,
-                       const std::function<void()>&                   renderLayers)
+                       int                                              activeLayerIndex,
+                       const std::function<void(int)>&                  setActiveLayer,
+                       const std::function<int()>&                      allocLayerId,
+                       const std::function<void(const std::string&)>&   addLayer,
+                       const std::function<void(int)>&                  removeLayer,
+                       const std::function<void(int, int)>&             reorderLayers,
+                       const std::function<void()>&                     renderLayers)
 {
     bool changed = false;
 
@@ -213,11 +214,11 @@ inline bool LayerPanel(std::vector<pelpaint::Layer>& layers,
     if (ImGui::Button("Add Layer##new", ImVec2(-1, 0))) {
         if (addLayer) {
             addLayer("");
-        } else {
-            int newZIndex = nextLayerId++;
+        } else if (allocLayerId) {
+            int newZIndex = allocLayerId();
             pelpaint::Layer newLayer("Layer_" + std::to_string(newZIndex), 1, 1, newZIndex);
             layers.push_back(newLayer);
-            activeLayerIndex = static_cast<int>(layers.size()) - 1;
+            if (setActiveLayer) setActiveLayer(static_cast<int>(layers.size()) - 1);
         }
         if (renderLayers) renderLayers();
         changed = true;
@@ -240,7 +241,7 @@ inline bool LayerPanel(std::vector<pelpaint::Layer>& layers,
             ImGui::PushID(i);
 
             if (ImGui::Selectable(layerLabel.c_str(), isSelected, ImGuiSelectableFlags_AllowDoubleClick)) {
-                activeLayerIndex = i;
+                if (setActiveLayer) setActiveLayer(i);
                 if (renderLayers) renderLayers();
                 changed = true;
             }
@@ -256,10 +257,10 @@ inline bool LayerPanel(std::vector<pelpaint::Layer>& layers,
                 ImGui::Separator();
                 if (ImGui::MenuItem("Duplicate##layer")) {
                     pelpaint::Layer newLayer = layer;
-                    newLayer.name   += " copy";
-                    newLayer.zIndex  = nextLayerId++;
+                    newLayer.name  += " copy";
+                    newLayer.zIndex = allocLayerId ? allocLayerId() : static_cast<int>(layers.size());
                     layers.push_back(newLayer);
-                    activeLayerIndex = static_cast<int>(layers.size()) - 1;
+                    if (setActiveLayer) setActiveLayer(static_cast<int>(layers.size()) - 1);
                     if (renderLayers) renderLayers();
                     changed = true;
                 }
@@ -268,8 +269,10 @@ inline bool LayerPanel(std::vector<pelpaint::Layer>& layers,
                         removeLayer(i);
                     } else {
                         layers.erase(layers.begin() + i);
-                        if (activeLayerIndex >= static_cast<int>(layers.size()))
-                            activeLayerIndex = static_cast<int>(layers.size()) - 1;
+                        int newIdx = (activeLayerIndex >= static_cast<int>(layers.size()))
+                                         ? static_cast<int>(layers.size()) - 1
+                                         : activeLayerIndex;
+                        if (setActiveLayer) setActiveLayer(newIdx);
                     }
                     if (renderLayers) renderLayers();
                     changed = true;
@@ -285,14 +288,14 @@ inline bool LayerPanel(std::vector<pelpaint::Layer>& layers,
             ImGui::PushItemWidth(60);
             if (i > 0 && ImGui::Button("^##up", ImVec2(25, 0))) {
                 if (reorderLayers) reorderLayers(i, i - 1);
-                else { std::swap(layers[i], layers[i - 1]); activeLayerIndex = i - 1; }
+                else { std::swap(layers[i], layers[i - 1]); if (setActiveLayer) setActiveLayer(i - 1); }
                 if (renderLayers) renderLayers();
                 changed = true;
             }
             ImGui::SameLine();
             if (i < static_cast<int>(layers.size()) - 1 && ImGui::Button("v##down", ImVec2(25, 0))) {
                 if (reorderLayers) reorderLayers(i, i + 1);
-                else { std::swap(layers[i], layers[i + 1]); activeLayerIndex = i + 1; }
+                else { std::swap(layers[i], layers[i + 1]); if (setActiveLayer) setActiveLayer(i + 1); }
                 if (renderLayers) renderLayers();
                 changed = true;
             }

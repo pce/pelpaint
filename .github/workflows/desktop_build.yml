@@ -1,13 +1,28 @@
 name: Desktop Cross-Platform Build
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Triggers
+#   • push to main / dev  → CI build + web deploy to GitHub Pages
+#   • push v*.*.* tag     → CI build + web deploy + GitHub Release w/ binaries
+#   • PR targeting main   → CI build only
+#   • workflow_dispatch   → manual run of the full matrix
+# ─────────────────────────────────────────────────────────────────────────────
 on:
   push:
     branches: [main, dev]
+    tags: ["v*.*.*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
 
+# Least-privilege default; individual jobs opt in to what they need.
+permissions:
+  contents: read
+
 jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Native desktop + iOS builds
+  # ───────────────────────────────────────────────────────────────────────────
   build:
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
@@ -15,10 +30,37 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - { name: "Windows Latest (MSVC)", os: windows-latest, build_type: "Release", cc: "cl", cxx: "cl", generators: "Visual Studio 17 2022" }
-          - { name: "macOS Latest (Clang)", os: macos-latest, build_type: "Release", cc: "clang", cxx: "clang++", generators: "Ninja" }
-          - { name: "iOS (Clang)", os: macos-latest, build_type: "Release", cc: "clang", cxx: "clang++", generators: "Xcode" }
-          - { name: "Ubuntu Latest (GCC)", os: ubuntu-latest, build_type: "Release", cc: "gcc", cxx: "g++", generators: "Ninja" }
+          - name: "Windows Latest (MSVC)"
+            os: windows-latest
+            build_type: Release
+            cc: cl
+            cxx: cl
+            generators: "Visual Studio 17 2022"
+            artifact: windows-msvc
+
+          - name: "macOS Latest (Clang)"
+            os: macos-latest
+            build_type: Release
+            cc: clang
+            cxx: clang++
+            generators: Ninja
+            artifact: macos-clang
+
+          - name: "iOS (Clang)"
+            os: macos-latest
+            build_type: Release
+            cc: clang
+            cxx: clang++
+            generators: Xcode
+            artifact: ios-clang
+
+          - name: "Ubuntu Latest (GCC)"
+            os: ubuntu-latest
+            build_type: Release
+            cc: gcc
+            cxx: g++
+            generators: Ninja
+            artifact: ubuntu-gcc
 
     steps:
       - uses: actions/checkout@v4
@@ -30,42 +72,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
-            cmake \
-            ninja-build \
-            libwayland-dev \
-            libxkbcommon-dev \
-            wayland-protocols \
-            libglu1-mesa-dev \
-            freeglut3-dev \
-            mesa-common-dev \
-            libasound2-dev \
-            libpulse-dev \
-            libaudio-dev \
-            libjack-dev \
-            libsndio-dev \
-            libx11-dev \
-            libxext-dev \
-            libxcursor-dev \
-            libxinerama-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libxss-dev \
-            libxtst-dev \
-            libdbus-1-dev \
-            libibus-1.0-dev \
-            libudev-dev \
+            build-essential cmake ninja-build \
+            libwayland-dev libxkbcommon-dev wayland-protocols \
+            libglu1-mesa-dev freeglut3-dev mesa-common-dev \
+            libasound2-dev libpulse-dev libaudio-dev libjack-dev \
+            libsndio-dev libx11-dev libxext-dev libxcursor-dev \
+            libxinerama-dev libxi-dev libxrandr-dev libxss-dev \
+            libxtst-dev libdbus-1-dev libibus-1.0-dev libudev-dev \
             libpipewire-0.3-dev
 
       - name: Install macOS Dependencies
         if: runner.os == 'macOS'
-        run: |
-          brew install ninja cmake
+        run: brew install ninja cmake
 
       - name: Install Windows Dependencies
         if: runner.os == 'Windows'
-        run: |
-          choco install ninja cmake
+        run: choco install ninja cmake
 
       - name: Configure CMake
         shell: bash
@@ -89,13 +111,13 @@ jobs:
           fi
 
       - name: Build
-        run: |
-          cmake --build build --config ${{ matrix.config.build_type }} --parallel
+        run: cmake --build build --config ${{ matrix.config.build_type }} --parallel
 
-      - name: Upload Artifacts
+      - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.config.name }} Binary
+          # Slug-style names so they survive as zip filenames in the release.
+          name: ${{ matrix.config.artifact }}
           path: |
             build/Release-iphoneos/*.app
             build/Release/*.app
@@ -106,6 +128,9 @@ jobs:
             !build/**/*.ninja
             !build/**/*.cmake
 
+  # ───────────────────────────────────────────────────────────────────────────
+  # Emscripten / WASM build
+  # ───────────────────────────────────────────────────────────────────────────
   emscripten-build:
     name: Emscripten (Web)
     runs-on: ubuntu-latest
@@ -129,22 +154,104 @@ jobs:
           emcmake cmake .. -DCMAKE_BUILD_TYPE=Release
           make -j$(nproc)
 
-      - name: Prepare Deployment
+      - name: Prepare dist/
         run: |
-          mkdir dist
+          mkdir -p dist
           cp build-em/PixelPaint.html dist/index.html
-          cp build-em/PixelPaint.js dist/
+          cp build-em/PixelPaint.js   dist/
           cp build-em/PixelPaint.wasm dist/
+          # Copy Emscripten pre-loaded asset bundle if present
+          [ -f build-em/PixelPaint.data ] && cp build-em/PixelPaint.data dist/ || true
 
-      - name: Upload Web Artifacts
+      # Regular artifact — available for download on every run and attached to
+      # the GitHub Release by the release job below.
+      - name: Upload Web Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Web Build
+          name: web-build
           path: dist/
 
-      - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
-        uses: peaceiris/actions-gh-pages@v3
+      # Pages-specific artifact — only uploaded when we actually intend to deploy
+      # (main branch or a version tag).  The deploy-pages job consumes this.
+      - name: Upload GitHub Pages Artifact
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+          path: dist/
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Deploy web build to GitHub Pages
+  # Runs after emscripten-build on pushes to main OR on version tags.
+  # Requires the repo to have Pages enabled:
+  #   Settings → Pages → Source → "GitHub Actions"
+  # ───────────────────────────────────────────────────────────────────────────
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: emscripten-build
+    runs-on: ubuntu-latest
+    if: >
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      pages: write # publish to GitHub Pages
+      id-token: write # OIDC token required by deploy-pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Create a GitHub Release with all desktop + web binaries attached.
+  # Only runs when a version tag (v*.*.*) is pushed.
+  #
+  # How to trigger a release:
+  #   git tag v1.2.3 -m "Release 1.2.3"
+  #   git push origin v1.2.3
+  # ───────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: [build, emscripten-build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write # create releases and upload assets
+    steps:
+      # Download every build artifact except the special "github-pages" bundle
+      # produced by upload-pages-artifact (that one is only for deploy-pages).
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*" # all artifacts …
+          path: artifacts/
+          merge-multiple: false
+
+      - name: Package each artifact as a zip
+        run: |
+          cd artifacts
+          # Skip the github-pages artifact — it's not a user-facing binary.
+          for dir in */; do
+            name="${dir%/}"
+            if [ "$name" = "github-pages" ]; then
+              echo "Skipping $name (pages artifact)"
+              continue
+            fi
+            zip -r "../${name}.zip" "$dir"
+            echo "Packaged: ${name}.zip"
+          done
+          ls -la ../*.zip
+
+      # softprops/action-gh-release is the de-facto standard release action:
+      # https://github.com/softprops/action-gh-release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "pelpaint ${{ github.ref_name }}"
+          # Auto-generate release notes from commits since the last tag.
+          generate_release_notes: true
+          draft: false
+          # Treat tags like v1.2.3-beta or v1.2.3-rc1 as pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: "*.zip"

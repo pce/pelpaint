@@ -4908,8 +4908,9 @@ void PixelPaintView::DrawLayersTab()
 {
     pelpaint::ui::LayerPanel(
         canvas_.Layers(),
-        canvas_.ActiveLayerIndexRef(),
-        canvas_.NextLayerIdRef(),
+        canvas_.ActiveLayerIndex(),
+        [&](int i)               { canvas_.SetActiveLayer(i); },
+        [&]() -> int             { return canvas_.AllocLayerId(); },
         [&](const std::string& name) { AddLayer(name); },
         [&](int index)               { RemoveLayer(index); },
         [&](int from, int to)        { ReorderLayers(from, to); },

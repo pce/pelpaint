@@ -80,9 +80,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(implot)
 
-
-
-
+# nlohmann/json — header-only JSON library
+message(STATUS "Fetching nlohmann/json...")
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+set(JSON_Install    OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(nlohmann_json)
 
 # Create ImGui library
 set(IMGUI_DIR ${imgui_SOURCE_DIR})
@@ -283,6 +291,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     SDL3::SDL3-static
     imgui_lib
     implot_lib
+    nlohmann_json::nlohmann_json
 )
 
 # Platform-specific settings
@@ -391,6 +400,7 @@ if(NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
         Catch2::Catch2WithMain
         imgui_lib
         implot_lib
+        nlohmann_json::nlohmann_json
     )
 
     target_compile_definitions(pelpaint_tests PRIVATE NOMINMAX)

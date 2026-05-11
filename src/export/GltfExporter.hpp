@@ -12,11 +12,11 @@
 #include <cstdint>            // uint8_t, uint32_t
 #include <cstring>            // std::memcpy
 #include <fstream>            // std::ofstream
-#include <iomanip>            // std::fixed, std::setprecision
 #include <limits>             // std::numeric_limits
-#include <sstream>            // std::ostringstream
 #include <string>             // std::string
 #include <vector>             // std::vector
+
+#include <nlohmann/json.hpp>
 
 namespace pelpaint::exporter {
 
@@ -31,7 +31,7 @@ struct GltfExportOptions {
  * @brief GLTF 2.0 exporter for pelpaint::ir::RegionGraph.
  *
  * @details Exports a RegionGraph as a GLTF 2.0 scene producing
- * a .gltf (hand-crafted JSON) and a .bin (binary buffer sidecar).
+ * a .gltf (nlohmann/json) and a .bin (binary buffer sidecar).
  *
  * GLTF structure:
  * - One mesh      per valid region   (extruded 3-D slab via MeshBuilder)
@@ -237,118 +237,105 @@ public:
             if (!binFile.good()) return false;
         }
 
-        // Build GLTF JSON.
+        // Build GLTF JSON using nlohmann/json.
+        using nlohmann::json;
         const std::size_t N = meshEntries.size();
-        std::ostringstream j;
-
-        j << "{\n";
-        j << "  \"asset\": { \"version\": \"2.0\", \"generator\": \"pelpaint\" },\n";
-        j << "  \"scene\": 0,\n";
 
         // scenes — flat list of node indices [0, 1, 2, …]
-        j << "  \"scenes\": [{ \"nodes\": [";
-        for (std::size_t i = 0; i < N; ++i) { if (i) j << ", "; j << i; }
-        j << "] }],\n";
+        json nodeIndices = json::array();
+        for (std::size_t i = 0; i < N; ++i)
+            nodeIndices.push_back(static_cast<int>(i));
 
         // nodes — one per mesh, no transform
-        j << "  \"nodes\": [\n";
-        for (std::size_t i = 0; i < N; ++i) {
-            if (i) j << ",\n";
-            j << "    { \"mesh\": " << i << " }";
-        }
-        j << "\n  ],\n";
+        json nodes = json::array();
+        for (std::size_t i = 0; i < N; ++i)
+            nodes.push_back(json{{"mesh", static_cast<int>(i)}});
 
-        // meshes
-        j << "  \"meshes\": [\n";
+        // meshes — one extruded slab per region
+        json meshes = json::array();
         for (std::size_t i = 0; i < N; ++i) {
             const auto& me = meshEntries[i];
-            if (i) j << ",\n";
-            j << "    {\n";
-            j << "      \"name\": \"region_" << me.regionId << "\",\n";
-            j << "      \"primitives\": [{\n";
-            j << "        \"attributes\": {\n";
-            j << "          \"POSITION\": " << me.accPos << ",\n";
-            j << "          \"NORMAL\": "   << me.accNrm << "\n";
-            j << "        },\n";
-            j << "        \"indices\": "  << me.accIdx << ",\n";
-            j << "        \"material\": " << i           << ",\n";
-            j << "        \"mode\": 4\n";
-            j << "      }]\n";
-            j << "    }";
+            meshes.push_back({
+                {"name", "region_" + std::to_string(me.regionId)},
+                {"primitives", json::array({
+                    {
+                        {"attributes", {
+                            {"POSITION", static_cast<int>(me.accPos)},
+                            {"NORMAL",   static_cast<int>(me.accNrm)}
+                        }},
+                        {"indices",  static_cast<int>(me.accIdx)},
+                        {"material", static_cast<int>(i)},
+                        {"mode",     4}
+                    }
+                })}
+            });
         }
-        j << "\n  ],\n";
 
         // materials — one flat PBR entry per region
-        j << "  \"materials\": [\n";
+        json materials = json::array();
         for (std::size_t i = 0; i < N; ++i) {
             const auto& me = meshEntries[i];
-            if (i) j << ",\n";
             const float r = me.color[0] / 255.f;
             const float g = me.color[1] / 255.f;
             const float b = me.color[2] / 255.f;
-            j << "    {\n";
-            j << "      \"name\": \"mat_" << me.regionId << "\",\n";
-            j << "      \"pbrMetallicRoughness\": {\n";
-            j << "        \"baseColorFactor\": ["
-              << ff(r) << ", " << ff(g) << ", " << ff(b) << ", 1.0],\n";
-            j << "        \"metallicFactor\": 0.0,\n";
-            j << "        \"roughnessFactor\": 1.0\n";
-            j << "      }\n";
-            j << "    }";
+            materials.push_back({
+                {"name", "mat_" + std::to_string(me.regionId)},
+                {"pbrMetallicRoughness", {
+                    {"baseColorFactor", {r, g, b, 1.0f}},
+                    {"metallicFactor",  0.0f},
+                    {"roughnessFactor", 1.0f}
+                }}
+            });
         }
-        j << "\n  ],\n";
 
         // accessors
-        j << "  \"accessors\": [\n";
-        for (std::size_t i = 0; i < accessors.size(); ++i) {
-            const auto& acc = accessors[i];
-            if (i) j << ",\n";
-            j << "    {\n";
-            j << "      \"bufferView\": "    << acc.bufViewIdx    << ",\n";
-            j << "      \"byteOffset\": 0,\n";
-            j << "      \"componentType\": " << acc.componentType << ",\n";
-            j << "      \"count\": "         << acc.count         << ",\n";
-            j << "      \"type\": \""        << acc.type          << "\"";
+        json accessorArray = json::array();
+        for (const auto& acc : accessors) {
+            json a = {
+                {"bufferView",    static_cast<int>(acc.bufViewIdx)},
+                {"byteOffset",    0},
+                {"componentType", static_cast<int>(acc.componentType)},
+                {"count",         static_cast<int>(acc.count)},
+                {"type",          acc.type}
+            };
             if (acc.hasMinMax) {
                 // min and max are required for POSITION by the GLTF spec
-                j << ",\n";
-                j << "      \"min\": ["
-                  << ff(acc.mn[0]) << ", " << ff(acc.mn[1]) << ", " << ff(acc.mn[2]) << "],\n";
-                j << "      \"max\": ["
-                  << ff(acc.mx[0]) << ", " << ff(acc.mx[1]) << ", " << ff(acc.mx[2]) << "]\n";
-            } else {
-                j << "\n";
+                a["min"] = {acc.mn[0], acc.mn[1], acc.mn[2]};
+                a["max"] = {acc.mx[0], acc.mx[1], acc.mx[2]};
             }
-            j << "    }";
+            accessorArray.push_back(a);
         }
-        j << "\n  ],\n";
 
         // bufferViews
-        j << "  \"bufferViews\": [\n";
-        for (std::size_t i = 0; i < bufViews.size(); ++i) {
-            const auto& bv = bufViews[i];
-            if (i) j << ",\n";
-            j << "    {\n";
-            j << "      \"buffer\": 0,\n";
-            j << "      \"byteOffset\": " << bv.byteOffset << ",\n";
-            j << "      \"byteLength\": " << bv.byteLength << ",\n";
-            j << "      \"target\": "     << bv.target     << "\n";
-            j << "    }";
+        json bufViewArray = json::array();
+        for (const auto& bv : bufViews) {
+            bufViewArray.push_back({
+                {"buffer",     0},
+                {"byteOffset", static_cast<int>(bv.byteOffset)},
+                {"byteLength", static_cast<int>(bv.byteLength)},
+                {"target",     static_cast<int>(bv.target)}
+            });
         }
-        j << "\n  ],\n";
 
-        // buffers — one .bin file
-        j << "  \"buffers\": [{\n";
-        j << "    \"uri\": \""       << binName        << "\",\n";
-        j << "    \"byteLength\": "  << binBuf.size()  << "\n";
-        j << "  }]\n";
-
-        j << "}\n";
+        // Assemble the complete glTF document
+        const json gltf = {
+            {"asset",       {{"version", "2.0"}, {"generator", "pelpaint"}}},
+            {"scene",       0},
+            {"scenes",      json::array({ {{"nodes", nodeIndices}} })},
+            {"nodes",       nodes},
+            {"meshes",      meshes},
+            {"materials",   materials},
+            {"accessors",   accessorArray},
+            {"bufferViews", bufViewArray},
+            {"buffers",     json::array({
+                {{"uri", binName}, {"byteLength", static_cast<int>(binBuf.size())}}
+            })}
+        };
 
         // Write JSON file (.gltf).
         std::ofstream gltfFile(gltfPath, std::ios::trunc);
         if (!gltfFile.is_open()) return false;
-        gltfFile << j.str();
+        gltfFile << gltf.dump(2);
         return gltfFile.good();
     }
 
@@ -375,29 +362,7 @@ private:
         buf.push_back(static_cast<uint8_t>((v >> 24) & 0xFFu));
     }
 
-    // Float → compact JSON string.
 
-    /// Format a float for JSON output.
-    /// Uses 6 decimal places then strips trailing zeros, always
-    /// preserving at least one digit after the decimal point.
-    ///
-    ///   ff(1.0f)      → "1.0"
-    ///   ff(0.5f)      → "0.5"
-    ///   ff(0.333333f) → "0.333333"
-    static std::string ff(float v)
-    {
-        std::ostringstream s;
-        s << std::fixed << std::setprecision(6) << v;
-        std::string str = s.str();
-
-        const auto dot = str.find('.');
-        if (dot != std::string::npos) {
-            auto last = str.find_last_not_of('0');
-            if (last == dot) ++last;  // keep exactly one digit after the dot
-            str.erase(last + 1u);
-        }
-        return str;
-    }
 };
 
 } // namespace pelpaint::exporter

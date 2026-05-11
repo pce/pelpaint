@@ -43,10 +43,9 @@ public:
     [[nodiscard]] std::vector<Layer>&       Layers()       noexcept { return layers_; }
     [[nodiscard]] const std::vector<Layer>& Layers() const noexcept { return layers_; }
 
-    // Mutable reference accessors used by the LayerPanel widget.
-    // Staged migration: will be removed once LayerPanel accepts callbacks only.
-    [[nodiscard]] [[deprecated("Use explicit layer management callbacks instead")]] int& ActiveLayerIndexRef() noexcept { return activeLayerIndex_; }
-    [[nodiscard]] [[deprecated("Use explicit layer management callbacks instead")]] int& NextLayerIdRef()      noexcept { return nextLayerId_;      }
+    /// Allocate and return the next unique layer ID (increments the internal
+    /// counter).  Use this instead of the old NextLayerIdRef() accessor.
+    int AllocLayerId() noexcept { return nextLayerId_++; }
 
     /**
      * @brief Write a pixel to the active layer only.
