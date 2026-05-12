@@ -92,6 +92,33 @@ set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 set(JSON_Install    OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
 
+# ── Font Awesome 5 Free Solid icon font ──────────────────────────────────────
+# License: SIL OFL 1.1 (free to bundle in any application).
+# Download once at configure time; subsequent runs skip if the file is present.
+set(FA5_FONT_DIR  "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts")
+set(FA5_FONT_FILE "${FA5_FONT_DIR}/fa-solid-900.ttf")
+file(MAKE_DIRECTORY "${FA5_FONT_DIR}")
+
+if(NOT EXISTS "${FA5_FONT_FILE}")
+    message(STATUS "Downloading Font Awesome 5 Free Solid (fa-solid-900.ttf)...")
+    file(DOWNLOAD
+        "https://github.com/FortAwesome/Font-Awesome/raw/5.15.4/webfonts/fa-solid-900.ttf"
+        "${FA5_FONT_FILE}"
+        TIMEOUT 60
+        STATUS FA5_DL_RESULT
+    )
+    list(GET FA5_DL_RESULT 0 FA5_DL_STATUS)
+    if(NOT FA5_DL_STATUS EQUAL 0)
+        message(WARNING
+            "Font Awesome 5 download failed (status ${FA5_DL_STATUS}).\n"
+            "The toolbar will fall back to text labels.\n"
+            "To fix: manually place fa-solid-900.ttf in ${FA5_FONT_DIR}")
+        file(REMOVE "${FA5_FONT_FILE}")
+    else()
+        message(STATUS "Font Awesome 5 Solid downloaded to ${FA5_FONT_FILE}")
+    endif()
+endif()
+
 # Create ImGui library
 set(IMGUI_DIR ${imgui_SOURCE_DIR})
 set(IMGUI_SOURCES
@@ -318,6 +345,14 @@ if(PLATFORM_IOS)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist"
     )
+
+    # Bundle the icon font into the iOS app (Resources/ inside .ipa)
+    if(EXISTS "${FA5_FONT_FILE}")
+        target_sources(${PROJECT_NAME} PRIVATE "${FA5_FONT_FILE}")
+        set_source_files_properties("${FA5_FONT_FILE}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "fonts"
+        )
+    endif()
 elseif(PLATFORM_MACOS)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         MACOSX_BUNDLE TRUE
@@ -331,6 +366,14 @@ elseif(PLATFORM_MACOS)
         XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED "YES"
         XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""
     )
+
+    # Bundle the icon font into the macOS app (Contents/Resources/fonts/)
+    if(EXISTS "${FA5_FONT_FILE}")
+        target_sources(${PROJECT_NAME} PRIVATE "${FA5_FONT_FILE}")
+        set_source_files_properties("${FA5_FONT_FILE}" PROPERTIES
+            MACOSX_PACKAGE_LOCATION "Resources/fonts"
+        )
+    endif()
 elseif(PLATFORM_WEB)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         SUFFIX ".html"
@@ -356,7 +399,29 @@ elseif(PLATFORM_WEB)
         "--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
     )
 
+    # Preload the icon font into the Emscripten virtual filesystem at /fonts/
+    if(EXISTS "${FA5_FONT_FILE}")
+        list(APPEND EMSCRIPTEN_LINK_FLAGS
+            "--preload-file ${FA5_FONT_FILE}@/fonts/fa-solid-900.ttf"
+        )
+    endif()
+
     target_link_options(${PROJECT_NAME} PRIVATE ${EMSCRIPTEN_LINK_FLAGS})
+endif()
+
+# Desktop (Linux / Windows): copy icon font next to the executable at build time
+if(NOT PLATFORM_MACOS AND NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
+    if(EXISTS "${FA5_FONT_FILE}")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${FA5_FONT_FILE}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/fonts/fa-solid-900.ttf"
+            COMMENT "Copying Font Awesome 5 icon font to build output"
+            VERBATIM
+        )
+    endif()
 endif()
 
 # Warnings

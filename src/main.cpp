@@ -164,6 +164,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
 
     pelpaint::ui::SetupUnrealTheme();
+    pelpaint::ui::LoadFonts();  // merge FA5 icon font into the default atlas
 
     // Setup Platform/Renderer backends
 #if defined(USE_METAL_BACKEND)

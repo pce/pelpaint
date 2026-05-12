@@ -177,7 +177,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
 
     // Setup Dear ImGui style - Unreal Engine theme
     pelpaint::ui::SetupUnrealTheme();
-    SDL_Log("ImGui setup complete with Unreal theme\n");
+    pelpaint::ui::LoadFonts();  // merge FA5 icon font into the default atlas
+    SDL_Log("ImGui setup complete with Unreal theme and icon font\n");
 
     // Setup Platform/Renderer backends
 #if defined(USE_METAL_BACKEND)

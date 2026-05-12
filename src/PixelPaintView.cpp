@@ -8,6 +8,7 @@
 #include "render/CpuComputeBackend.hpp"
 #include "ui/Widgets.hpp"
 #include "ui/FabBar.hpp"
+#include "ui/IconsFontAwesome5.h"
 #include "tools/DrawingAlgorithms.hpp"
 #include "filters/Filters.hpp"
 #ifdef __EMSCRIPTEN__
@@ -2754,20 +2755,23 @@ void PixelPaintView::HandleCanvasInput()
 void PixelPaintView::DrawToolbar()
 {
     struct ToolButton {
-        DrawTool tool;
-        const char* label;
-        const char* name;
+        DrawTool    tool;
+        const char* label;   // FA5 icon glyph (UTF-8) or short text fallback
+        const char* tooltip; // shown on hover
     };
 
+    // FA5 glyph labels give a clean icon-only toolbar.
+    // If the icon font failed to load the raw UTF-8 bytes are displayed as
+    // replacement boxes — still fully functional, just less pretty.
     const ToolButton toolButtons[] = {
-        { DrawTool::Pencil, "P", "Pencil" },
-        { DrawTool::Eraser, "E", "Eraser" },
-        { DrawTool::Line, "L", "Line" },
-        { DrawTool::Fill, "F", "Fill" },
-        { DrawTool::Eyedropper, "I", "Eyedropper" },
-        { DrawTool::Spray, "S", "Spray" },
-        { DrawTool::RectangleSelect, "\xE2\x96\xA1", "Select (mode in panel)" },
-        { DrawTool::BucketFill, "K", "Bucket Fill" }
+        { DrawTool::Pencil,          ICON_FA_PENCIL_ALT,    "Pencil"                   },
+        { DrawTool::Eraser,          ICON_FA_ERASER,        "Eraser"                   },
+        { DrawTool::Line,            ICON_FA_SLASH,         "Line"                     },
+        { DrawTool::Fill,            ICON_FA_TINT,          "Fill"                     },
+        { DrawTool::Eyedropper,      ICON_FA_EYE_DROPPER,   "Eyedropper"               },
+        { DrawTool::Spray,           ICON_FA_MAGIC,         "Spray"                    },
+        { DrawTool::RectangleSelect, ICON_FA_VECTOR_SQUARE, "Select (mode in panel)"   },
+        { DrawTool::BucketFill,      ICON_FA_FILL_DRIP,     "Bucket Fill"              },
     };
 
     const int toolCount = static_cast<int>(sizeof(toolButtons) / sizeof(toolButtons[0]));
@@ -2822,7 +2826,7 @@ void PixelPaintView::DrawToolbar()
             ImGui::PopStyleColor();
 
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", entry.name);
+            ImGui::SetTooltip("%s", entry.tooltip);
     }
     ImGui::EndGroup();
 }

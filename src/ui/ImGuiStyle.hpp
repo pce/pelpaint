@@ -1,8 +1,88 @@
 #pragma once
 
 #include <imgui.h>
+#include <SDL3/SDL.h>
+#include <filesystem>
+#include "IconsFontAwesome5.h"
 
 namespace pelpaint::ui {
+
+
+/// Base size (logical pixels) shared by the body font and the merged icon font.
+static constexpr float kBaseFontSize = 14.0f;
+
+/// Glyph range loaded from fa-solid-900.ttf — covers all FA5 free-solid icons.
+static constexpr ImWchar kFA5GlyphRanges[] = { ICON_MIN_FA5, ICON_MAX_FA5, 0 };
+
+/// Returns the full path to a font file stored in the bundled fonts/ directory.
+/// Returns an empty string when the file cannot be located.
+inline std::string ResolveResourceFontPath(const char* filename)
+{
+    namespace fs = std::filesystem;
+
+#if defined(__EMSCRIPTEN__)
+    // Emscripten preloads resources into the virtual FS at /fonts/
+    return std::string("/fonts/") + filename;
+#else
+    // SDL3: SDL_GetBasePath() returns a cached const char* — do NOT SDL_free() it.
+    const char* sdlBase = SDL_GetBasePath();
+    if (!sdlBase) return {};
+    fs::path baseDir(sdlBase);
+
+#if defined(__APPLE__)
+    // macOS app bundle: executable is in .app/Contents/MacOS/
+    //                   resources live in   .app/Contents/Resources/
+    auto candidate = baseDir.parent_path() / "Resources" / "fonts" / filename;
+    if (fs::exists(candidate)) return candidate.string();
+
+    // iOS app bundle (and non-bundle macOS debug builds): resources sit
+    // directly next to the executable.
+    candidate = baseDir / "fonts" / filename;
+    if (fs::exists(candidate)) return candidate.string();
+#else
+    // Desktop (Linux / Windows): fonts/ directory next to the executable.
+    auto candidate = baseDir / "fonts" / filename;
+    if (fs::exists(candidate)) return candidate.string();
+#endif
+
+    return {};  // not found
+#endif
+}
+
+/// Load fonts into the ImGui font atlas.
+/// Must be called once after ImGui::CreateContext() and before the first frame.
+inline void LoadFonts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Base font: ImGui's built-in ProggyClean — guarantees ASCII always works
+    io.Fonts->AddFontDefault();
+
+    // Icon font: Font Awesome 5 Free Solid, merged on top of the base font.
+    //            Icons are addressed by their Unicode code-points (ICON_FA_* macros)
+    const std::string fa5Path = ResolveResourceFontPath(FONT_ICON_FILE_NAME_FA5S);
+    if (!fa5Path.empty())
+    {
+        ImFontConfig cfg;
+        cfg.MergeMode        = true;              // blend icons into base font
+        cfg.PixelSnapH       = true;              // crisp icon rendering
+        cfg.GlyphMinAdvanceX = kBaseFontSize;     // monospace advance for icons
+        cfg.GlyphOffset      = ImVec2(0.f, 1.f);  // fine-tune vertical alignment
+
+        io.Fonts->AddFontFromFileTTF(
+            fa5Path.c_str(),
+            kBaseFontSize,
+            &cfg,
+            kFA5GlyphRanges
+        );
+        SDL_Log("[PelPaint] Icon font loaded: %s\n", fa5Path.c_str());
+    }
+    else
+    {
+        SDL_Log("[PelPaint] Warning: %s not found — toolbar will use text labels.\n",
+                FONT_ICON_FILE_NAME_FA5S);
+    }
+}
 
 // Unreal Engine inspired dark theme
 inline void SetupUnrealTheme() {
