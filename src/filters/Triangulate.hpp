@@ -246,8 +246,11 @@ inline void rasterizeTriangle(
         const int x0 = std::max(0,     (int)std::ceil(xMin));
         const int x1 = std::min(W - 1, (int)std::floor(xMax));
         for (int x = x0; x <= x1; ++x) {
-            if (src[y * W + x].a >= alphaThr)
+            // We output the triangle color directly.
+            // If the source was transparent, we preserve the transparent background (dst is initialized to 0 alpha).
+            if (src[y * W + x].a >= alphaThr) {
                 dst[y * W + x] = pelpaint::Pixel{ r, g, b, a };
+            }
         }
     }
 }
@@ -261,8 +264,10 @@ inline void rasterizeTriangle(
     const std::vector<Pt>& pts,
     uint8_t alphaThr)
 {
-    // Start from the source (preserves transparent pixels by default)
-    std::vector<pelpaint::Pixel> dst(src.begin(), src.end());
+    // 1) Initialize destination as fully transparent instead of copying src.
+    // If the triangulator decides to render here, it writes solid colour.
+    // This allows triangulation to be drawn cleanly onto new layers!
+    std::vector<pelpaint::Pixel> dst(W * H, pelpaint::Pixel{0, 0, 0, 0});
 
     const auto tris = delaunay(pts, W, H);
     for (const Tri& tri : tris) {

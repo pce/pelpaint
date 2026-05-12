@@ -1,5 +1,4 @@
 #pragma once
-// ---------------------------------------------------------------------------
 // FabBar.hpp — Floating Action Bar for ImGui.
 //
 // Renders a compact pill-shaped horizontal button row in a borderless,
@@ -19,7 +18,6 @@
 //   };
 //   int hit = pelpaint::ui::FabBar("##selfab", screenPos, kSel);
 //   if (hit == 0) CropToSelection();
-// ---------------------------------------------------------------------------
 
 #include <imgui.h>
 #include <span>
@@ -27,9 +25,7 @@
 
 namespace pelpaint::ui {
 
-// ---------------------------------------------------------------------------
 // FabAction descriptor
-// ---------------------------------------------------------------------------
 struct FabAction {
     std::string_view label;
     std::string_view tooltip;
@@ -38,7 +34,6 @@ struct FabAction {
     bool disabled    = false;   ///< Greyed-out (e.g. Paste with empty clipboard)
 };
 
-// ---------------------------------------------------------------------------
 // FabBar — draw and return index of pressed button (-1 if none pressed).
 //
 // @param id        Unique ImGui window ID string.
@@ -46,7 +41,6 @@ struct FabAction {
 // @param actions   Span of FabAction descriptors.
 // @param btnH      Button height in logical px (0 = auto from font size).
 // @param bgAlpha   Window background alpha (default 0.88).
-// ---------------------------------------------------------------------------
 [[nodiscard]] inline int FabBar(const char*                id,
                                  ImVec2                     screenPos,
                                  std::span<const FabAction> actions,

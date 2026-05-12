@@ -256,6 +256,41 @@
             };
         };
 
+        // File drop on canvas → new layer
+        // Works because the HTML 'drop' event IS a direct user gesture,
+        // so no browser activation restrictions apply.
+        canvas.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        canvas.addEventListener('drop', function(e) {
+            e.preventDefault();
+            var file = e.dataTransfer.files[0];
+            if (!file) return;
+            // Accept common image types
+            if (!file.type.startsWith('image/') &&
+                !/\.(png|jpg|jpeg|tga|bmp|gif|webp)$/i.test(file.name)) return;
+
+            var reader = new FileReader();
+            reader.onload = function(ev) {
+                try {
+                    var data = new Uint8Array(ev.target.result);
+                    var path = '/tmp/drop_' + file.name;
+                    FS.writeFile(path, data);
+                    var pPath = Module.stringToNewUTF8(path);
+                    Module._pelpaint_drop_image(pPath);
+                    Module._free(pPath);
+                } catch(err) {
+                    console.error('[pelpaint] drop error:', err);
+                }
+            };
+            reader.onerror = function() {
+                console.error('[pelpaint] FileReader error on drop');
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
         // Show console output toggle (for debugging)
         var showConsole = false;
         document.addEventListener('keydown', function(e) {

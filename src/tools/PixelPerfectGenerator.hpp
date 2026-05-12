@@ -82,6 +82,10 @@ public:
     static PixelPerfect Mirror (const PixelPerfect& art, bool horizontal = true);
     static PixelPerfect Compose(const std::vector<PixelPerfect>& layers);
 
+    /// Advance the shared RNG so that the next Generate call produces
+    /// a different pseudo-random layout without changing any parameters.
+    static std::mt19937& GetRNGPublic() { return GetRNG(); }
+
 private:
     static float Perlin2D(float x, float y, float scale);
     static void  DrawLSystemBranch(std::vector<Pixel>& pixels, int width, int height,

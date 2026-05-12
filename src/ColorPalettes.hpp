@@ -1,3 +1,4 @@
+/// @file ColorPalettes.hpp
 #pragma once
 
 #include <vector>
@@ -6,7 +7,9 @@
 
 namespace pelpaint {
 
-// Represent a single pixel (RGBA)
+/// A single RGBA pixel with 8 bits per channel.
+///
+/// Alpha defaults to 255 (fully opaque) when omitted from the constructor.
 struct Pixel {
     uint8_t r, g, b, a;
 
@@ -14,12 +17,11 @@ struct Pixel {
     Pixel(uint8_t red, uint8_t green, uint8_t blue, uint8_t alpha = 255)
         : r(red), g(green), b(blue), a(alpha) {}
 
-    // Equality operator
     bool operator==(const Pixel& other) const {
         return r == other.r && g == other.g && b == other.b && a == other.a;
     }
 
-    // Calculate color distance (squared Euclidean distance in RGB space)
+    /// Squared Euclidean distance in RGB space (alpha is ignored).
     int DistanceSquared(const Pixel& other) const {
         int dr = static_cast<int>(r) - static_cast<int>(other.r);
         int dg = static_cast<int>(g) - static_cast<int>(other.g);
@@ -27,7 +29,7 @@ struct Pixel {
         return dr * dr + dg * dg + db * db;
     }
 
-    // Find nearest color in a palette
+    /// Returns @p color unchanged when @p palette is empty.
     static Pixel FindNearest(const Pixel& color, const std::vector<Pixel>& palette) {
         if (palette.empty()) return color;
 
@@ -46,7 +48,7 @@ struct Pixel {
     }
 };
 
-// Palette structure with metadata
+/// A named colour palette with an optional human-readable description.
 struct ColorPalette {
     std::string name;
     std::vector<Pixel> colors;
@@ -56,9 +58,10 @@ struct ColorPalette {
         : name(n), colors(c), description(desc) {}
 };
 
+/// Pre-defined palette constants and palette collection utilities.
 namespace palettes {
 
-// PICO-8 Palette (16 colors)
+/// PICO-8 fantasy-console palette — 16 colors.
 inline const std::vector<Pixel> PICO8 = {
     {0, 0, 0, 255},       // 0: Black
     {29, 43, 83, 255},    // 1: Dark Blue
@@ -78,7 +81,7 @@ inline const std::vector<Pixel> PICO8 = {
     {255, 204, 170, 255}  // 15: Peach
 };
 
-// Game Boy Classic (4 colors)
+/// Original Game Boy green palette — 4 colors.
 inline const std::vector<Pixel> GAMEBOY = {
     {15, 56, 15, 255},    // Darkest
     {48, 98, 48, 255},    // Dark
@@ -86,7 +89,7 @@ inline const std::vector<Pixel> GAMEBOY = {
     {155, 188, 15, 255}   // Lightest
 };
 
-// Game Boy Pocket (4 colors - black & white)
+/// Game Boy Pocket monochrome palette — 4 colors.
 inline const std::vector<Pixel> GAMEBOY_POCKET = {
     {0, 0, 0, 255},       // Black
     {85, 85, 85, 255},    // Dark Gray
@@ -94,7 +97,7 @@ inline const std::vector<Pixel> GAMEBOY_POCKET = {
     {255, 255, 255, 255}  // White
 };
 
-// NES Palette (subset of most used colors)
+/// Nintendo Entertainment System — 14 representative colors.
 inline const std::vector<Pixel> NES = {
     {0, 0, 0, 255},       // Black
     {124, 124, 124, 255}, // Gray
@@ -112,7 +115,7 @@ inline const std::vector<Pixel> NES = {
     {0, 64, 88, 255}      // Dark Blue
 };
 
-// Commodore 64 Palette (16 colors)
+/// Commodore 64 palette — 16 colors.
 inline const std::vector<Pixel> C64 = {
     {0, 0, 0, 255},       // Black
     {255, 255, 255, 255}, // White
@@ -132,7 +135,7 @@ inline const std::vector<Pixel> C64 = {
     {159, 159, 159, 255}  // Light Gray
 };
 
-// Apple II (6 colors)
+/// Apple II hi-res colors — 6 colors.
 inline const std::vector<Pixel> APPLE_II = {
     {0, 0, 0, 255},       // Black
     {114, 38, 64, 255},   // Purple/Magenta
@@ -142,7 +145,7 @@ inline const std::vector<Pixel> APPLE_II = {
     {255, 255, 255, 255}  // White
 };
 
-// CGA Palette (16 colors)
+/// IBM Color Graphics Adapter palette — 16 colors.
 inline const std::vector<Pixel> CGA = {
     {0, 0, 0, 255},       // Black
     {0, 0, 170, 255},     // Blue
@@ -162,7 +165,7 @@ inline const std::vector<Pixel> CGA = {
     {255, 255, 255, 255}  // White
 };
 
-// ZX Spectrum Palette (15 colors)
+/// Sinclair ZX Spectrum palette — 15 colors (no duplicate black).
 inline const std::vector<Pixel> ZX_SPECTRUM = {
     {0, 0, 0, 255},       // Black
     {0, 0, 215, 255},     // Blue
@@ -181,7 +184,7 @@ inline const std::vector<Pixel> ZX_SPECTRUM = {
     {255, 255, 255, 255}  // Bright White
 };
 
-// Grayscale (16 shades)
+/// Evenly-distributed grayscale ramp — 16 shades.
 inline const std::vector<Pixel> GRAYSCALE_16 = {
     {0, 0, 0, 255}, {17, 17, 17, 255}, {34, 34, 34, 255}, {51, 51, 51, 255},
     {68, 68, 68, 255}, {85, 85, 85, 255}, {102, 102, 102, 255}, {119, 119, 119, 255},
@@ -189,7 +192,7 @@ inline const std::vector<Pixel> GRAYSCALE_16 = {
     {204, 204, 204, 255}, {221, 221, 221, 255}, {238, 238, 238, 255}, {255, 255, 255, 255}
 };
 
-// Grayscale (8 shades)
+/// Evenly-distributed grayscale ramp — 8 shades.
 inline const std::vector<Pixel> GRAYSCALE_8 = {
     {0, 0, 0, 255},
     {36, 36, 36, 255},
@@ -201,13 +204,13 @@ inline const std::vector<Pixel> GRAYSCALE_8 = {
     {255, 255, 255, 255}
 };
 
-// Monochrome (2 colors)
+/// Pure black and white — 2 colors.
 inline const std::vector<Pixel> MONOCHROME = {
     {0, 0, 0, 255},
     {255, 255, 255, 255}
 };
 
-// Teletext Palette (8 colors)
+/// Teletext / ANSI primary palette — 8 colors.
 inline const std::vector<Pixel> TELETEXT = {
     {0, 0, 0, 255},       // Black
     {255, 0, 0, 255},     // Red
@@ -219,7 +222,7 @@ inline const std::vector<Pixel> TELETEXT = {
     {255, 255, 255, 255}  // White
 };
 
-// Amstrad CPC (27 colors - basic set)
+/// Amstrad CPC basic palette — 27 colors.
 inline const std::vector<Pixel> AMSTRAD_CPC = {
     {0, 0, 0, 255},       // Black
     {0, 0, 128, 255},     // Blue
@@ -250,7 +253,7 @@ inline const std::vector<Pixel> AMSTRAD_CPC = {
     {255, 255, 255, 255}  // Bright White
 };
 
-// DB32 (DawnBringer's 32 Color Palette)
+/// DawnBringer's 32-color palette.
 inline const std::vector<Pixel> DB32 = {
     {0, 0, 0, 255},       {34, 32, 52, 255},    {69, 40, 60, 255},    {102, 57, 49, 255},
     {143, 86, 59, 255},   {223, 113, 38, 255},  {217, 160, 102, 255}, {238, 195, 154, 255},
@@ -262,7 +265,7 @@ inline const std::vector<Pixel> DB32 = {
     {217, 87, 99, 255},   {215, 123, 186, 255}, {143, 151, 74, 255},  {138, 111, 48, 255}
 };
 
-// AAP-64 (Adigun A. Polack's 64 color palette)
+/// Adigun A. Polack's AAP-64 palette — 64 colors.
 inline const std::vector<Pixel> AAP64 = {
     {6, 6, 8, 255},       {20, 16, 19, 255},    {59, 23, 37, 255},    {115, 23, 45, 255},
     {180, 32, 42, 255},   {223, 62, 35, 255},   {250, 106, 10, 255},  {249, 163, 27, 255},
@@ -282,7 +285,7 @@ inline const std::vector<Pixel> AAP64 = {
     {162, 240, 148, 255}, {203, 246, 125, 255}, {242, 251, 125, 255}, {254, 232, 146, 255}
 };
 
-// Okabe-Ito (8-color, color-blind friendly)
+/// Okabe-Ito color-blind-friendly palette — 8 colors.
 inline const std::vector<Pixel> OKABE_ITO = {
     {0, 0, 0, 255},
     {230, 159, 0, 255},
@@ -294,7 +297,7 @@ inline const std::vector<Pixel> OKABE_ITO = {
     {204, 121, 167, 255}
 };
 
-// Solarized (16 colors)
+/// Solarized theme palette — 16 colors (base tones + accent hues).
 inline const std::vector<Pixel> SOLARIZED = {
     {0, 43, 54, 255},    // base03
     {7, 54, 66, 255},    // base02
@@ -314,7 +317,7 @@ inline const std::vector<Pixel> SOLARIZED = {
     {133, 153, 0, 255}   // green
 };
 
-// Pastel 8 (custom, free-to-use)
+/// Soft pastel palette — 8 colors.
 inline const std::vector<Pixel> PASTEL_8 = {
     {255, 179, 186, 255},
     {255, 223, 186, 255},
@@ -326,7 +329,7 @@ inline const std::vector<Pixel> PASTEL_8 = {
     {255, 210, 210, 255}
 };
 
-// B16 (Basic 16 - free to use)
+/// Basic 16-color web palette — 16 colors.
 inline const std::vector<Pixel> B16 = {
     {0, 0, 0, 255},       {255, 255, 255, 255}, {128, 128, 128, 255}, {192, 192, 192, 255},
     {255, 0, 0, 255},     {0, 255, 0, 255},     {0, 0, 255, 255},     {255, 255, 0, 255},
@@ -334,7 +337,7 @@ inline const std::vector<Pixel> B16 = {
     {0, 0, 128, 255},     {128, 128, 0, 255},   {0, 128, 128, 255},   {128, 0, 128, 255}
 };
 
-// MSX (16 colors)
+/// MSX1 palette — 16 colors.
 inline const std::vector<Pixel> MSX = {
     {0, 0, 0, 255},       {0, 0, 0, 255},       {33, 200, 66, 255},   {94, 220, 120, 255},
     {84, 85, 237, 255},   {125, 118, 252, 255}, {212, 82, 77, 255},   {66, 235, 245, 255},
@@ -342,7 +345,7 @@ inline const std::vector<Pixel> MSX = {
     {33, 176, 59, 255},   {201, 91, 186, 255},  {204, 204, 204, 255}, {255, 255, 255, 255}
 };
 
-// EGA (16 colors)
+/// IBM EGA palette — 16 colors.
 inline const std::vector<Pixel> EGA = {
     {0, 0, 0, 255},       {0, 0, 170, 255},     {0, 170, 0, 255},     {0, 170, 170, 255},
     {170, 0, 0, 255},     {170, 0, 170, 255},   {170, 85, 0, 255},    {170, 170, 170, 255},
@@ -350,7 +353,7 @@ inline const std::vector<Pixel> EGA = {
     {255, 85, 85, 255},   {255, 85, 255, 255},  {255, 255, 85, 255},  {255, 255, 255, 255}
 };
 
-// ANSI (16 colors)
+/// ANSI terminal palette — 16 colors.
 inline const std::vector<Pixel> ANSI = {
     {0, 0, 0, 255},       {128, 0, 0, 255},     {0, 128, 0, 255},     {128, 128, 0, 255},
     {0, 0, 128, 255},     {128, 0, 128, 255},   {0, 128, 128, 255},   {192, 192, 192, 255},
@@ -358,7 +361,7 @@ inline const std::vector<Pixel> ANSI = {
     {0, 0, 255, 255},     {255, 0, 255, 255},   {0, 255, 255, 255},   {255, 255, 255, 255}
 };
 
-// C64-SC (Pepto)
+/// Commodore 64 Pepto palette — 16 colors.
 inline const std::vector<Pixel> C64_SC = {
     {0, 0, 0, 255},       {255, 255, 255, 255}, {104, 55, 43, 255},   {112, 164, 178, 255},
     {111, 61, 134, 255},  {88, 141, 67, 255},   {53, 40, 121, 255},   {184, 199, 111, 255},
@@ -366,12 +369,11 @@ inline const std::vector<Pixel> C64_SC = {
     {108, 108, 108, 255}, {154, 210, 132, 255}, {108, 94, 181, 255},  {149, 149, 149, 255}
 };
 
-// Pokemon Gen1 (4 colors)
+/// Pokemon Generation 1 palette — 4 colors.
 inline const std::vector<Pixel> POKEMON_GEN1 = {
     {8, 24, 32, 255},     {52, 104, 86, 255},   {136, 192, 112, 255}, {224, 248, 208, 255}
 };
 
-// All palettes organized
 inline std::vector<ColorPalette> GetAllPalettes() {
     return {
         {"PICO-8", PICO8, "Fantasy console palette (16 colors)"},
@@ -401,7 +403,8 @@ inline std::vector<ColorPalette> GetAllPalettes() {
     };
 }
 
-// Get palette by name
+/// Case-sensitive look-up; names must match those used in GetAllPalettes().
+/// Returns nullptr when not found.
 inline const std::vector<Pixel>* GetPaletteByName(const std::string& name) {
     if (name == "PICO-8") return &PICO8;
     if (name == "Game Boy") return &GAMEBOY;

@@ -240,6 +240,18 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
         }
     }
 
+    // -----------------------------------------------------------------------
+    // File drop — desktop: SDL fires SDL_EVENT_DROP_FILE with the file path.
+    // Web: handled via JS dragover/drop in shell.html which calls pelpaint_drop_image().
+    // -----------------------------------------------------------------------
+#if !defined(__EMSCRIPTEN__)
+    if (event->type == SDL_EVENT_DROP_FILE && state->pixelPaintView)
+    {
+        if (event->drop.data)
+            state->pixelPaintView->LoadImageAsNewLayer(event->drop.data);
+    }
+#endif
+
     return SDL_APP_CONTINUE;
 }
 
@@ -365,3 +377,20 @@ void SDL_AppQuit(void* appstate, SDL_AppResult result)
     delete state;
     g_AppState = nullptr;
 }
+
+// ---------------------------------------------------------------------------
+// WASM / Web: C export called from the JS drag-and-drop handler in shell.html
+// The JS side writes the dropped file to Emscripten MEMFS (/tmp/<name>)
+// and then calls Module._pelpaint_drop_image(ptr) with the MEMFS path.
+// ---------------------------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+extern "C" {
+    EMSCRIPTEN_KEEPALIVE
+    void pelpaint_drop_image(const char* memfsPath)
+    {
+        if (g_AppState && g_AppState->pixelPaintView && memfsPath)
+            g_AppState->pixelPaintView->LoadImageAsNewLayer(memfsPath);
+    }
+}
+#endif

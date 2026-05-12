@@ -1,0 +1,88 @@
+{
+  "palettes": [
+    {
+      "name": "Sea",
+      "description": "Ocean and sea tones (8 colors)",
+      "colors": [
+        "#050e1a",
+        "#0a1628",
+        "#1a5276",
+        "#2e86c1",
+        "#76d7c4",
+        "#e07b54",
+        "#f0d9a0",
+        "#1e8449"
+      ]
+    },
+    {
+      "name": "Forest",
+      "description": "Forest and woodland tones (8 colors)",
+      "colors": [
+        "#2c1a0e",
+        "#4a3728",
+        "#3d6b3e",
+        "#4a7c59",
+        "#5da832",
+        "#a0c832",
+        "#d4cdb5",
+        "#a8cfe8"
+      ]
+    },
+    {
+      "name": "Sky",
+      "description": "Sky and atmosphere tones (8 colors)",
+      "colors": [
+        "#0d1b2a",
+        "#1b3a5c",
+        "#5a8fc7",
+        "#87ceeb",
+        "#f0f4f8",
+        "#f4843c",
+        "#c0392b",
+        "#6c3483"
+      ]
+    },
+    {
+      "name": "Flowers",
+      "description": "Flower and garden tones (8 colors)",
+      "colors": [
+        "#c0392b",
+        "#f1948a",
+        "#9b59b6",
+        "#f1c40f",
+        "#fdfefe",
+        "#27ae60",
+        "#1e8449",
+        "#4a2c0a"
+      ]
+    },
+    {
+      "name": "Desert",
+      "description": "Desert and arid landscape tones (8 colors)",
+      "colors": [
+        "#f0c060",
+        "#c8943c",
+        "#c0613c",
+        "#b87048",
+        "#9b3a2a",
+        "#f5e6c8",
+        "#87ceeb",
+        "#4a9060"
+      ]
+    },
+    {
+      "name": "Autumn",
+      "description": "Autumn and fall foliage tones (8 colors)",
+      "colors": [
+        "#f0a030",
+        "#c0521c",
+        "#8b1a1a",
+        "#d4a017",
+        "#6b3a1f",
+        "#7a7a2a",
+        "#a04020",
+        "#f5e6c8"
+      ]
+    }
+  ]
+}

@@ -269,10 +269,9 @@ run_web() {
 
     if [ -f "${WEB_PATH}/PixelPaint.html" ]; then
         print_info "Starting local web server..."
-        print_info "Open http://localhost:8000/PixelPaint.html in your browser"
         print_info "Press Ctrl+C to stop the server"
         cd "$WEB_PATH"
-        python3 -m http.server 8000
+        python3 -m http.server 8000 --bind 127.0.0.1
     else
         print_error "Web build not found at: ${WEB_PATH}"
         exit 1

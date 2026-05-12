@@ -46,7 +46,45 @@ ASCII Logo generated with http://patorjk.com/software/taag/#p=display&h=1&v=0&f=
 
     Built with <3 using SDL3, Dear ImGui, and modern C++
 
+CLI:
+
+`cd tools/pelpaint_cli && mkdir -p build && cd build && cmake .. && make`
+
 ## Export
 
 - SVG Export uses greedy rectangle merging algorithm
 - Mesh uses depth sampling, masking triangulation / extrusion
+
+## iOS
+
+### Simulator (fastest)
+
+    ./scripts/dev.sh ios-sim
+    open -a Simulator
+    xcrun simctl install booted \
+    build/ios-simulator-Release/Release-iphonesimulator/PixelPaint.app
+    xcrun simctl launch booted com.pixelpaint.app
+
+### Physical iPad via Xcode (recommended)
+
+    mkdir -p build/ios-Release && cd build/ios-Release
+    cmake ../.. -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES="arm64" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="14.0" -DIOS=TRUE -G "Xcode"
+    open PixelPaint.xcodeproj
+
+→ set team in Signing & Capabilities → plug in iPad → ⌘R
+
+### Physical iPad fully CLI
+
+replace YOURTEAMID:
+
+    cmake ../.. -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES="arm64" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="14.0" \
+    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="Apple Development" \
+    -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM="YOURTEAMID" \
+    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=YES \
+    -DIOS=TRUE -G "Xcode"
+    cmake --build . --config Release -- -allowProvisioningUpdates
+    xcrun devicectl device install app \
+    --device 821A075B-02A8-53E4-99FD-AF2F15861535 \
+    Release-iphoneos/PixelPaint.app

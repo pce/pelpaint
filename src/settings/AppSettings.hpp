@@ -24,7 +24,9 @@ struct KeyBinding {
     // Must be called from inside an ImGui frame.
     [[nodiscard]] bool JustPressed() const noexcept;
 
-    // Human-readable string e.g. "Ctrl+Z" (for UI display).
+    // Human-readable string for UI display, e.g. "Ctrl+Z" on Windows/Linux/Web
+    // or "Cmd+Z" on macOS (where ConfigMacOSXBehaviors maps ctrl=true → ⌘).
+    // Safe to call any time after ImGui::CreateContext().
     [[nodiscard]] std::string Display() const;
 
     // Serialized lowercase form e.g. "ctrl+z" (written to the INI file).

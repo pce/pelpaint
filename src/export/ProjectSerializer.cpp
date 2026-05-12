@@ -10,12 +10,8 @@
 
 namespace pelpaint::exporter {
 
-// ============================================================
-// Internal helpers
-// ============================================================
 namespace {
 
-// ---------- BinaryWriter ----------
 struct BinaryWriter {
     std::ofstream& f;
 
@@ -38,7 +34,6 @@ struct BinaryWriter {
     }
 };
 
-// ---------- BinaryReader ----------
 struct BinaryReader {
     std::ifstream& f;
 
@@ -67,7 +62,6 @@ struct BinaryReader {
     }
 };
 
-// ---------- Compress RGBA pixels to PNG in memory ----------
 std::vector<uint8_t> CompressPixelsToPng(
     const std::vector<uint8_t>& rgba,
     uint32_t w,
@@ -89,7 +83,6 @@ std::vector<uint8_t> CompressPixelsToPng(
     return out;
 }
 
-// ---------- Decompress PNG from memory to RGBA pixels ----------
 bool DecompressPng(
     const std::vector<uint8_t>& blob,
     uint32_t expectedW,
@@ -115,9 +108,6 @@ bool DecompressPng(
 
 } // anonymous namespace
 
-// ============================================================
-// ProjectSerializer::Save
-// ============================================================
 std::expected<void, pelpaint::Error>
 ProjectSerializer::Save(const std::string& filename, const ProjectState& state)
 {
@@ -148,10 +138,9 @@ ProjectSerializer::Save(const std::string& filename, const ProjectState& state)
     uint8_t anti = state.brushAntialiased ? 1 : 0;
     if (!w.write(anti)) return std::unexpected(pelpaint::Error::FileIO("Write error"));
 
-    // Palette
-    if (!w.write(static_cast<int32_t>(state.selectedPaletteIndex))) return std::unexpected(pelpaint::Error::FileIO("Write error"));
-    uint8_t palEn = state.paletteEnabled ? 1 : 0;
-    if (!w.write(palEn)) return std::unexpected(pelpaint::Error::FileIO("Write error"));
+    if (!w.write(state.palSource))          return std::unexpected(pelpaint::Error::FileIO("Write error"));
+    if (!w.write(state.paletteNamedIndex))  return std::unexpected(pelpaint::Error::FileIO("Write error"));
+    if (!w.write(state.maxAutoColors))      return std::unexpected(pelpaint::Error::FileIO("Write error"));
     if (!w.write(static_cast<uint32_t>(state.customPalette.size()))) return std::unexpected(pelpaint::Error::FileIO("Write error"));
     for (const auto& px : state.customPalette) {
         if (!w.write(px.r) || !w.write(px.g) || !w.write(px.b) || !w.write(px.a))
@@ -198,9 +187,6 @@ ProjectSerializer::Save(const std::string& filename, const ProjectState& state)
     return {};
 }
 
-// ============================================================
-// ProjectSerializer::Load
-// ============================================================
 std::expected<ProjectState, pelpaint::Error>
 ProjectSerializer::Load(const std::string& filename)
 {
@@ -214,8 +200,8 @@ ProjectSerializer::Load(const std::string& filename)
     uint32_t magic = 0, version = 0;
     if (!r.read(magic))   return std::unexpected(pelpaint::Error::FileIO("Read error"));
     if (!r.read(version)) return std::unexpected(pelpaint::Error::FileIO("Read error"));
-    if (magic != kMagic)       return std::unexpected(pelpaint::Error::FileIO("Not a .ppx project file"));
-    if (version != kVersion)   return std::unexpected(pelpaint::Error::FileIO("Unsupported project file version"));
+    if (magic != kMagic)      return std::unexpected(pelpaint::Error::FileIO("Not a .ppx project file"));
+    if (version != kVersion)  return std::unexpected(pelpaint::Error::FileIO("Unsupported project file version"));
 
     // Canvas
     if (!r.read(state.canvasWidth))  return std::unexpected(pelpaint::Error::FileIO("Read error"));
@@ -240,12 +226,9 @@ ProjectSerializer::Load(const std::string& filename)
     state.brushAntialiased = (anti != 0);
 
     // Palette
-    int32_t spi = 0;
-    if (!r.read(spi)) return std::unexpected(pelpaint::Error::FileIO("Read error"));
-    state.selectedPaletteIndex = spi;
-    uint8_t palEn = 0;
-    if (!r.read(palEn)) return std::unexpected(pelpaint::Error::FileIO("Read error"));
-    state.paletteEnabled = (palEn != 0);
+    if (!r.read(state.palSource))         return std::unexpected(pelpaint::Error::FileIO("Read error"));
+    if (!r.read(state.paletteNamedIndex)) return std::unexpected(pelpaint::Error::FileIO("Read error"));
+    if (!r.read(state.maxAutoColors))     return std::unexpected(pelpaint::Error::FileIO("Read error"));
     uint32_t cpCount = 0;
     if (!r.read(cpCount)) return std::unexpected(pelpaint::Error::FileIO("Read error"));
     state.customPalette.resize(cpCount);

@@ -131,9 +131,14 @@ bool KeyBinding::JustPressed() const noexcept {
 std::string KeyBinding::Display() const {
     if (key == ImGuiKey_None) return "(none)";
     std::string s;
-    if (ctrl)  s += "Ctrl+";
+    // Dear ImGui automatically sets ConfigMacOSXBehaviors = true on Apple
+    // platforms, which swaps the Ctrl and Command key mappings so that
+    // bindings with ctrl=true fire on ⌘ (Command), not ^ (Control).
+    // We reflect that here so the displayed hint matches what the user presses.
+    const bool macLike = ImGui::GetIO().ConfigMacOSXBehaviors;
+    if (ctrl)  s += macLike ? "Cmd+"    : "Ctrl+";
     if (shift) s += "Shift+";
-    if (alt)   s += "Alt+";
+    if (alt)   s += macLike ? "Option+" : "Alt+";
     auto name = KeyToName(key);
     if (name.empty()) {
         s += '?';

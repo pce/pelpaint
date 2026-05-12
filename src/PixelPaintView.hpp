@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,8 +17,11 @@
 #include "core/Types.hpp"
 #include "core/Canvas.hpp"
 #include "core/UndoHistory.hpp"
+#include "core/PaletteRef.hpp"
+#include "core/PaletteLibrary.hpp"
 #include "settings/AppSettings.hpp"
 #include "ui/SettingsDialog.hpp"
+#include "ui/PaletteEditorDialog.hpp"
 #include "ui/AnimationPanelUI.hpp"
 #include "effects/PaletteCycler.hpp"
 #include "effects/AnimFxBaker.hpp"
@@ -64,7 +68,7 @@ public:
     // Entry point called every frame from main loop.
     void Draw(std::string_view label);
 
-    // ---- Metal device (Apple platforms only) ----------------------------
+    /// Metal device (Apple platforms only)
 #if defined(USE_METAL_BACKEND)
     void SetMetalDevice(void* device);
 #endif
@@ -72,10 +76,10 @@ public:
     void OnReturnFromBackground() noexcept;
     void OnMemoryWarning() noexcept;
 
-    // ---- iOS file callback (static so it can be passed as C function ptr) --
+    // iOS file callback (static so it can be passed as C function ptr)
     static void IOSOpenFileCallback(void* context, const char* filepath);
 
-    // ---- SDL pen / stylus event forwarding ------------------------------
+    // SDL pen / stylus event forwarding
     // Call these from SDL_AppEvent when SDL_EVENT_PEN_AXIS fires so that
     // pressure-sensitive and tilt-aware brush modes receive live hardware data.
 
@@ -90,7 +94,7 @@ public:
     void SetPenTilt(float x, float y) noexcept;
 
 #ifdef __EMSCRIPTEN__
-    // ---- WASM video-export bindings ---------------------------------
+    //  WASM video-export bindings
     // Called by the extern "C" functions in VideoExport.cpp so they can
     // reach private timeline_ / canvasWidth without friendship tricks.
 
@@ -126,21 +130,12 @@ private:
         canvasHeight = canvas_.Height();
     }
 
-    // ====================================================================
-    // Undo / Redo history
-    //
-    // Replaces: undoStack, redoStack, maxUndoSteps
-    // ====================================================================
-
-    // ---- Settings ----------------------------------------------------------
     AppSettings          settings_;
     ui::SettingsDialog   settingsDialog_;
 
     UndoHistory<CanvasSnapshot> undo_{ 50 };
 
-    // ====================================================================
-    // GPU texture
-    // ====================================================================
+    /// GPU texture
 
 #if defined(USE_METAL_BACKEND)
     void* metalTexture = nullptr;
@@ -156,11 +151,8 @@ private:
     void UpdateTexture();       // reads from canvas_.CompositeSurface()
     void DestroyTexture();
 
-    // ====================================================================
-    // Layer management (thin wrappers over canvas_)
-    // ====================================================================
-
-    void InitializeLayers();                       // calls canvas_.InitDefaultLayers()
+    /// Layer management (thin wrappers over canvas_)
+    void InitializeLayers();                ///< calls canvas_.InitDefaultLayers()
     void AddLayer(const std::string& name);
     void RemoveLayer(int index);
     void ReorderLayers(int from, int to);
@@ -176,26 +168,45 @@ private:
         return l;
     }
 
-    // Force a composite + texture refresh (use sparingly — prefer IsDirty flow)
-    void RenderLayerToCanvas();
+    void RenderLayerToCanvas(); ///< Force a composite + texture refresh (use sparingly: prefer IsDirty flow)
 
-    // CompositeLayers: kept for filter methods that build a temporary flat buffer
-    // for export.  Writes into the caller-supplied output vector.
-    void CompositeLayers(std::vector<Pixel>& output) const;
+    void CompositeLayers(std::vector<Pixel>& output) const; ///< CompositeLayers: kept for filter methods that build a temporary flat buffer
+                                                            ///< for export?  Writes into the caller-supplied output vector.
 
-    // ====================================================================
-    // Undo helpers
-    // ====================================================================
 
-    void PushUndo(std::string_view description);
-    void Undo();
-    void Redo();
-    void ClearUndoStack();
 
     // ====================================================================
-    // Canvas operations (delegate to canvas_)
+    // Undo / Redo
     // ====================================================================
+    //
+    // The three wrappers below are intentionally thin but non-trivial:
+    //
+    //   PushUndo  — binds canvas_.MakeSnapshot() + undo_.Push() so every
+    //               mutation call site stays a single, readable line.
+    //
+    //   Undo/Redo — both must call SyncDimsFromCanvas() + set
+    //               textureNeedsUpdate after restoring the snapshot.
+    //               Encoding this once here prevents the three call sites
+    //               (keyboard shortcut, toolbar, context menu) from each
+    //               duplicating the invariant.
+    //
+    // ClearUndoStack was removed — undo_.Clear() is called directly in
+    // OnMemoryWarning(), which is the only site that needs it, and a
+    // one-line passthrough wrapper adds no value.
 
+    void PushUndo(std::string_view description); ///< Snapshot current canvas state onto the undo stack.
+    void Undo();  ///< Restore previous snapshot; syncs canvas dims + marks texture dirty.
+    void Redo();  ///< Re-apply a rolled-back snapshot; same post-restore invariants as Undo().
+
+    /// @name Undo / Redo availability queries
+    /// Forward @c UndoHistory::CanUndo / CanRedo so callers (toolbar, menus)
+    /// can disable buttons without accessing the private @c undo_ member.
+    ///@{
+    [[nodiscard]] bool CanUndo() const noexcept { return undo_.CanUndo(); } ///< @c true when Ctrl+Z would have an effect.
+    [[nodiscard]] bool CanRedo() const noexcept { return undo_.CanRedo(); } ///< @c true when Ctrl+Y would have an effect.
+    ///@}
+
+    /// Canvas operations (delegate to canvas_)
     void ResizeCanvas(int newWidth, int newHeight);
     void ClearCanvas(const Pixel& color = {0, 0, 0, 255});
 
@@ -256,15 +267,20 @@ private:
     bool   cloneSourceSet   = false;
     ImVec2 cloneSourcePoint = { 0.f, 0.f };
 
-    // ====================================================================
     // Colour palette state
-    // ====================================================================
 
-    std::vector<ColorPalette> availablePalettes;
-    int                       selectedPaletteIndex = 10;    // default: DB32
-    std::vector<Pixel>        customPalette;
-    bool                      paletteEnabled        = true;
-    bool                      ditheringPreserveAlpha = false;
+    /// All known palettes (built-in + any loaded from JSON files).
+    PaletteLibrary             paletteLibrary_;
+    /// Active palette selection — source type + index/colors/cap.
+    PaletteRef                 activePalette_;
+    /// Inline palette editor dialog.
+    ui::PaletteEditorDialog    paletteEditorDialog_;
+    /// [Save As...] filename input buffer.
+    char                       saveAsPaletteName_[256] = {};
+    /// Whether the Save As input row is currently visible.
+    bool                       showSaveAsPaletteInput_  = false;
+
+    bool ditheringPreserveAlpha = false;
 
     // ====================================================================
     // Bucket fill
@@ -284,11 +300,28 @@ private:
     bool showPixelifyPreview     = false;
 
     // ====================================================================
-    // Export settings
+    // Canvas resize UI state  (used by the "Canvas" section in DrawFilesTab)
     // ====================================================================
+
+    int  newCanvasWidth_  = 256; ///< Width  (px) staged for New Canvas / Resize Canvas.
+    int  newCanvasHeight_ = 256; ///< Height (px) staged for New Canvas / Resize Canvas.
+
+    // ====================================================================
+    // Export scale state (PNG / TGA only, set in DrawFilesTab)
+    // ====================================================================
+
+    bool exportCustomSize_ = false; ///< When @c true the output is nearest-neighbor scaled
+                                    ///< to @c exportTargetW_ × @c exportTargetH_ at save time
+                                    ///< instead of being written at the native canvas size.
+    int  exportTargetW_    = 256;   ///< Target export width  in pixels (exportCustomSize_ only).
+    int  exportTargetH_    = 256;   ///< Target export height in pixels (exportCustomSize_ only).
 
     int exportTypeIndex    = 0;
     int imageExportFormat  = 0;
+    // ---- PNG export settings ----------------------------------------
+    int pngExportMode      = 0;    ///< 0=Composite only, 1=With layers, 2=Current layer only
+    bool pngCurrentLayerOnly = false; ///< Alternative: export current layer as standalone image
+    // -----------------------------------------------------------------
     int meshExportFormat   = 0;
     int depthMapGridSize   = 8;
     int   depthMapColorMode = 0;     // 0=Grayscale  1=FalseColor  2=WarmTone
@@ -338,6 +371,7 @@ private:
     int   blurRadius          = 2;
     bool  blurGaussian        = false;
     float sharpenStrength     = 0.8f;
+    bool  filterToNewLayer    = true;
     int   edgeDetectMode      = 0;   // 0=Sobel 1=Laplacian
     float edgeDetectThresh    = 30.f;
     bool  edgeDetectInvert    = false;
@@ -542,7 +576,10 @@ private:
     void        SaveLastDirectory(const std::string& dir);
 
     bool SaveToTGA(const std::string& filename);
-    bool SaveToPNG(const std::string& filename);
+    bool SaveToTGAScaled(const std::string& filename, int targetW, int targetH);
+    bool SaveToPNGScaled(const std::string& filename, int targetW, int targetH);
+    /// @param exportMode: 0 = composite only (default), 1 = composite + layer metadata, 2 = current layer only
+    bool SaveToPNG(const std::string& filename, int exportMode = 0);
     bool SaveToJPEG(const std::string& filename, int quality = 90);
     bool SaveToSVGPixel(const std::string& filename);
     bool SaveToSVGVector(const std::string& filename);
@@ -551,6 +588,9 @@ private:
     bool SaveSVG(const std::string& filename);
     bool SaveMesh(const std::string& filename);
     bool LoadFromImage(const std::string& filename);
+    /// Drop / import: scales image to current canvas size and adds it as a new layer.
+    /// Works cross-platform (desktop SDL drop events + web JS drop, no file-picker needed).
+    bool LoadImageAsNewLayer(const std::string& filename);
     bool SaveBinary(const std::string& filename);
     bool LoadBinary(const std::string& filename);
     bool SaveProject(const std::string& filename);
@@ -568,12 +608,12 @@ private:
     // ====================================================================
 
     void ConvertToGrayscale();
-    void ApplyAtkinsonDithering(const std::vector<Pixel>& palette);
-    void ApplyStuckiDithering(const std::vector<Pixel>& palette);
-    void ApplyFloydSteinbergDithering(const std::vector<Pixel>& palette);
-    void ApplyOrderedDithering(const std::vector<Pixel>& palette);
-    void ApplyDithering(DitheringType type, const std::vector<Pixel>& palette);
-    void ApplyPalette(const std::vector<Pixel>& palette);
+    void ApplyAtkinsonDithering(std::span<const Pixel> palette);
+    void ApplyStuckiDithering(std::span<const Pixel> palette);
+    void ApplyFloydSteinbergDithering(std::span<const Pixel> palette);
+    void ApplyOrderedDithering(std::span<const Pixel> palette);
+    void ApplyDithering(DitheringType type, std::span<const Pixel> palette);
+    void ApplyPalette(std::span<const Pixel> palette);
     void ApplyPixelify(int pixelSize, bool usePalette = true);
     void ApplyShapeRedrawFilter();
     void ApplyTriangulate();
@@ -583,7 +623,7 @@ private:
     void ApplyOutlineLayer();
 
     // Helpers used by dithering algorithms
-    Pixel  FindNearestPaletteColor(const Pixel& color, const std::vector<Pixel>& palette) const;
+    Pixel  FindNearestPaletteColor(const Pixel& color, std::span<const Pixel> palette) const;
     float  ColorDistance(const Pixel& a, const Pixel& b) const noexcept;
 
     // Helpers used by ShapeRedraw

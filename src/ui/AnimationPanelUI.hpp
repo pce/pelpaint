@@ -45,6 +45,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -202,7 +203,7 @@ struct PaletteCycleDialogState {
 [[nodiscard]] inline bool DrawPaletteCycleDialog(
     PaletteCycleDialogState&             dlg,
     const pelpaint::Canvas&              canvas,
-    const std::vector<pelpaint::Pixel>&  currentPalette,
+    std::span<const pelpaint::Pixel>     currentPalette,
     float                                timelineFPS)
 {
     // Responsive sizing: full width on small screens, constrained on iPad/desktop.

@@ -213,6 +213,7 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         src/core/Canvas.cpp
         src/core/AnimationTimeline.cpp
         src/tools/DrawingAlgorithms.cpp
+        src/tools/ImageSlicer.cpp
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
         src/filters/Filters.cpp
@@ -225,6 +226,9 @@ if(PLATFORM_MACOS OR PLATFORM_IOS)
         src/FileChooser.cpp
         src/settings/AppSettings.cpp
         src/ui/SettingsDialog.cpp
+        src/ui/PaletteEditorDialog.cpp
+        src/core/PaletteRef.cpp
+        src/core/PaletteLibrary.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/PixelPaintView.mm
     )
 
@@ -251,6 +255,7 @@ else()
         src/core/Canvas.cpp
         src/core/AnimationTimeline.cpp
         src/tools/DrawingAlgorithms.cpp
+        src/tools/ImageSlicer.cpp
         src/tools/ParticleSystem.cpp
         src/tools/PixelPerfectGenerator.cpp
         src/filters/Filters.cpp
@@ -263,6 +268,9 @@ else()
         src/FileChooser.cpp
         src/settings/AppSettings.cpp
         src/ui/SettingsDialog.cpp
+        src/ui/PaletteEditorDialog.cpp
+        src/core/PaletteRef.cpp
+        src/core/PaletteLibrary.cpp
     )
 endif()
 
@@ -342,7 +350,7 @@ elseif(PLATFORM_WEB)
         # video_export_*  — animation frame access for MediaRecorder capture
         # file_chooser_on_file_selected — file-open/save callback
         # malloc / free — JS allocates frame buffers with Module._malloc
-        "-sEXPORTED_FUNCTIONS=_main,_file_chooser_on_file_selected,_free,_malloc,_video_export,_video_export_frame_count,_video_export_frame_width,_video_export_frame_height,_video_export_fps,_video_export_get_frame"
+        "-sEXPORTED_FUNCTIONS=_main,_file_chooser_on_file_selected,_free,_malloc,_video_export,_video_export_frame_count,_video_export_frame_width,_video_export_frame_height,_video_export_fps,_video_export_get_frame,_pelpaint_drop_image"
         # Runtime helpers used in JS EM_ASM blocks
         "-sEXPORTED_RUNTIME_METHODS=stringToNewUTF8,UTF8ToString,FS"
         "--shell-file ${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html"
@@ -386,9 +394,13 @@ if(NOT PLATFORM_IOS AND NOT PLATFORM_WEB)
         src/operators/FrameOperator.cpp
         src/tools/ParticleSystem.cpp
         src/tools/DrawingAlgorithms.cpp
+        src/tools/ImageSlicer.cpp
         src/tools/PixelPerfectGenerator.cpp
         src/settings/AppSettings.cpp
         src/ui/SettingsDialog.cpp
+        src/ui/PaletteEditorDialog.cpp
+        src/core/PaletteRef.cpp
+        src/core/PaletteLibrary.cpp
         src/export/MeshExporter.cpp
     )
 
